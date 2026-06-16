@@ -36,6 +36,7 @@ class GithubClient:
         self._client = httpx.AsyncClient(
             base_url="https://api.github.com",
             headers=headers,
+            follow_redirects=True,
             timeout=30,
         )
 
