@@ -1,8 +1,24 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { Database, Github, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
-import { askDocs, ingestGithub, QueryResponse, sendQueryFeedback } from "@/lib/api";
+import { FormEvent, useEffect, useState } from "react";
+import {
+  Clock3,
+  Database,
+  Github,
+  Loader2,
+  RefreshCw,
+  SendHorizonal,
+  ThumbsDown,
+  ThumbsUp
+} from "lucide-react";
+import {
+  askDocs,
+  getQueryHistory,
+  ingestGithub,
+  QueryHistoryItem,
+  QueryResponse,
+  sendQueryFeedback
+} from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
@@ -17,7 +33,40 @@ export function ChatShell() {
   const [question, setQuestion] = useState("How do I run FastAPI locally?");
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState<"ingest" | "query" | null>(null);
+  const [history, setHistory] = useState<QueryHistoryItem[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadHistory();
+  }, []);
+
+  async function loadHistory() {
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      const response = await getQueryHistory(10);
+      setHistory(response.items);
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "Could not load query history");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  function restoreHistoryItem(item: QueryHistoryItem) {
+    setMessages((current) => [
+      ...current,
+      { role: "user", content: item.question },
+      {
+        role: "assistant",
+        content: item.answer,
+        queryId: item.id,
+        feedback: item.feedback ?? undefined
+      }
+    ]);
+  }
 
   async function handleIngest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +107,7 @@ export function ChatShell() {
           citations: response.citations
         }
       ]);
+      void loadHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Query failed");
     } finally {
@@ -77,6 +127,9 @@ export function ChatShell() {
 
     try {
       await sendQueryFeedback(queryId, nextFeedback);
+      setHistory((current) =>
+        current.map((item) => (item.id === queryId ? { ...item, feedback: nextFeedback } : item))
+      );
     } catch (err) {
       setMessages((current) =>
         current.map((message, index) =>
@@ -126,6 +179,57 @@ export function ChatShell() {
               {error}
             </div>
           ) : null}
+
+          <div className="mt-8 border-t border-line pt-6">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                <Clock3 size={16} aria-hidden="true" />
+                Query history
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadHistory()}
+                disabled={historyBusy}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Refresh query history"
+              >
+                <RefreshCw size={15} className={historyBusy ? "animate-spin" : ""} />
+              </button>
+            </div>
+
+            {historyError ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {historyError}
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              {history.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => restoreHistoryItem(item)}
+                  className="block w-full rounded-md border border-line bg-white px-3 py-2 text-left hover:border-accent/50 hover:bg-slate-50"
+                >
+                  <span className="line-clamp-2 block text-sm font-medium leading-5 text-ink">
+                    {item.question}
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    {new Intl.DateTimeFormat(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    }).format(new Date(item.created_at))}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {!historyBusy && history.length === 0 && !historyError ? (
+              <p className="text-sm leading-6 text-slate-500">Recent answered questions will appear here.</p>
+            ) : null}
+          </div>
         </aside>
 
         <section className="flex min-h-screen flex-col">

@@ -13,6 +13,22 @@ export type QueryResponse = {
   retrieved_chunk_ids: number[];
 };
 
+export type QueryHistoryItem = {
+  id: number;
+  question: string;
+  answer: string;
+  retrieved_chunk_ids: number[];
+  feedback: -1 | 0 | 1 | null;
+  created_at: string;
+};
+
+export type QueryHistoryResponse = {
+  items: QueryHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 export async function askDocs(question: string): Promise<QueryResponse> {
@@ -54,4 +70,19 @@ export async function sendQueryFeedback(queryId: number, feedback: -1 | 0 | 1): 
     const message = await response.text();
     throw new Error(message || "Feedback failed");
   }
+}
+
+export async function getQueryHistory(limit = 10, offset = 0): Promise<QueryHistoryResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset)
+  });
+  const response = await fetch(`${backendUrl}/api/queries?${params.toString()}`);
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Could not load query history");
+  }
+
+  return response.json();
 }
