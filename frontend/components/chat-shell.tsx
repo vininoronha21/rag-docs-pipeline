@@ -1,12 +1,14 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { Database, Github, Loader2, SendHorizonal } from "lucide-react";
-import { askDocs, ingestGithub, QueryResponse } from "@/lib/api";
+import { Database, Github, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
+import { askDocs, ingestGithub, QueryResponse, sendQueryFeedback } from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
   content: string;
+  queryId?: number;
+  feedback?: -1 | 0 | 1;
   citations?: QueryResponse["citations"];
 };
 
@@ -49,12 +51,39 @@ export function ChatShell() {
       const response = await askDocs(asked);
       setMessages((current) => [
         ...current,
-        { role: "assistant", content: response.answer, citations: response.citations }
+        {
+          role: "assistant",
+          content: response.answer,
+          queryId: response.query_id,
+          citations: response.citations
+        }
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Query failed");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function handleFeedback(messageIndex: number, queryId: number, feedback: -1 | 1) {
+    const currentFeedback = messages[messageIndex]?.feedback;
+    const nextFeedback = currentFeedback === feedback ? 0 : feedback;
+
+    setMessages((current) =>
+      current.map((message, index) =>
+        index === messageIndex ? { ...message, feedback: nextFeedback } : message
+      )
+    );
+
+    try {
+      await sendQueryFeedback(queryId, nextFeedback);
+    } catch (err) {
+      setMessages((current) =>
+        current.map((message, index) =>
+          index === messageIndex ? { ...message, feedback: currentFeedback } : message
+        )
+      );
+      setError(err instanceof Error ? err.message : "Feedback failed");
     }
   }
 
@@ -121,6 +150,34 @@ export function ChatShell() {
                   }
                 >
                   <p className="whitespace-pre-wrap">{message.content}</p>
+                  {message.role === "assistant" && message.queryId ? (
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleFeedback(index, message.queryId as number, 1)}
+                        className={
+                          message.feedback === 1
+                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700"
+                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                        }
+                        aria-label="Mark answer as helpful"
+                      >
+                        <ThumbsUp size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleFeedback(index, message.queryId as number, -1)}
+                        className={
+                          message.feedback === -1
+                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700"
+                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                        }
+                        aria-label="Mark answer as not helpful"
+                      >
+                        <ThumbsDown size={15} />
+                      </button>
+                    </div>
+                  ) : null}
                   {message.citations && message.citations.length > 0 ? (
                     <div className="mt-4 space-y-2 border-t border-line pt-3">
                       {message.citations.slice(0, 3).map((citation, citationIndex) => (
