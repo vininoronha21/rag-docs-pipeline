@@ -1,3 +1,4 @@
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,15 +46,29 @@ async def ingest_github(
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> IngestResponse:
-    repository, results = await ingest_github_repository(
-        session,
-        settings=settings,
-        embeddings=embeddings,
-        repo_url=str(payload.repo_url),
-        branch=payload.branch,
-        path=payload.path,
-        max_files=payload.max_files,
-    )
+    try:
+        repository, results = await ingest_github_repository(
+            session,
+            settings=settings,
+            embeddings=embeddings,
+            repo_url=str(payload.repo_url),
+            branch=payload.branch,
+            path=payload.path,
+            max_files=payload.max_files,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        raise _github_http_exception(exc) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach GitHub. Try again later.",
+        ) from exc
+
     documents = [
         IngestedDocument(
             source_url=result.source_url,
@@ -66,6 +81,24 @@ async def ingest_github(
         repository=repository,
         documents=documents,
         total_chunks=sum(document.chunk_count for document in documents),
+    )
+
+
+def _github_http_exception(exc: httpx.HTTPStatusError) -> HTTPException:
+    status_code = exc.response.status_code
+    if status_code == status.HTTP_404_NOT_FOUND:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="GitHub repository, branch, or path was not found.",
+        )
+    if status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub rejected the request. Check credentials or rate limits.",
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="GitHub returned an upstream error. Try again later.",
     )
 
 
