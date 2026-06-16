@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Document, DocumentChunk, QueryLog
@@ -132,6 +132,22 @@ async def log_query(
     session.add(query)
     await session.flush()
     return query
+
+
+async def list_queries(
+    session: AsyncSession,
+    *,
+    limit: int,
+    offset: int,
+) -> tuple[list[QueryLog], int]:
+    total = await session.scalar(select(func.count()).select_from(QueryLog))
+    result = await session.scalars(
+        select(QueryLog)
+        .order_by(QueryLog.created_at.desc(), QueryLog.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.all()), total or 0
 
 
 async def update_query_feedback(

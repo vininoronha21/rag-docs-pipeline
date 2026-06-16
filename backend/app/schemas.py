@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -66,3 +67,19 @@ class QueryFeedbackRequest(BaseModel):
 class QueryFeedbackResponse(BaseModel):
     query_id: int
     feedback: int
+
+
+class QueryHistoryItem(BaseModel):
+    id: int
+    question: str
+    answer: str
+    retrieved_chunk_ids: list[int]
+    feedback: int | None
+    created_at: datetime
+
+
+class QueryHistoryResponse(BaseModel):
+    items: list[QueryHistoryItem]
+    total: int
+    limit: int
+    offset: int

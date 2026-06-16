@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -11,13 +11,20 @@ from app.schemas import (
     IngestResponse,
     QueryFeedbackRequest,
     QueryFeedbackResponse,
+    QueryHistoryItem,
+    QueryHistoryResponse,
     QueryRequest,
     QueryResponse,
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
 from app.services.rag import build_extractive_answer
-from app.services.repositories import log_query, retrieve_chunks, update_query_feedback
+from app.services.repositories import (
+    list_queries,
+    log_query,
+    retrieve_chunks,
+    update_query_feedback,
+)
 
 router = APIRouter()
 
@@ -99,6 +106,31 @@ async def query_docs(
             )
             for chunk in chunks
         ],
+    )
+
+
+@router.get("/queries", response_model=QueryHistoryResponse)
+async def query_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> QueryHistoryResponse:
+    queries, total = await list_queries(session, limit=limit, offset=offset)
+    return QueryHistoryResponse(
+        items=[
+            QueryHistoryItem(
+                id=query.id,
+                question=query.user_query,
+                answer=query.llm_response,
+                retrieved_chunk_ids=query.retrieved_chunks_ids,
+                feedback=query.user_feedback,
+                created_at=query.created_at,
+            )
+            for query in queries
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 
