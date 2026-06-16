@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   Clock3,
   Database,
+  ExternalLink,
   Github,
   Loader2,
   RefreshCw,
@@ -27,6 +28,18 @@ type Message = {
   feedback?: -1 | 0 | 1;
   citations?: QueryResponse["citations"];
 };
+
+function citationMetadata(citation: QueryResponse["citations"][number]) {
+  const section = typeof citation.metadata.section === "string" ? citation.metadata.section : null;
+  const sourcePath =
+    typeof citation.metadata.source_path === "string" ? citation.metadata.source_path : null;
+  const detail = [sourcePath, section].filter(Boolean).join(" / ");
+
+  return {
+    detail,
+    label: citation.title ?? sourcePath ?? citation.source_url
+  };
+}
 
 export function ChatShell() {
   const [repoUrl, setRepoUrl] = useState("https://github.com/tiangolo/fastapi");
@@ -284,18 +297,38 @@ export function ChatShell() {
                   ) : null}
                   {message.citations && message.citations.length > 0 ? (
                     <div className="mt-4 space-y-2 border-t border-line pt-3">
-                      {message.citations.slice(0, 3).map((citation, citationIndex) => (
-                        <a
-                          key={citation.chunk_id}
-                          href={citation.source_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block text-xs text-slate-600 underline-offset-4 hover:underline"
-                        >
-                          [{citationIndex + 1}] {citation.title ?? citation.source_url} · score{" "}
-                          {citation.score.toFixed(3)}
-                        </a>
-                      ))}
+                      {message.citations.slice(0, 3).map((citation, citationIndex) => {
+                        const metadata = citationMetadata(citation);
+
+                        return (
+                          <a
+                            key={citation.chunk_id}
+                            href={citation.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-slate-600 hover:border-accent/50 hover:bg-white"
+                          >
+                            <span className="flex items-start justify-between gap-3">
+                              <span className="min-w-0">
+                                <span className="block truncate font-medium text-ink">
+                                  [{citationIndex + 1}] {metadata.label}
+                                </span>
+                                {metadata.detail ? (
+                                  <span className="mt-1 block line-clamp-2">{metadata.detail}</span>
+                                ) : null}
+                              </span>
+                              <ExternalLink
+                                size={14}
+                                className="mt-0.5 shrink-0 text-slate-400"
+                                aria-hidden="true"
+                              />
+                            </span>
+                            <span className="mt-2 block text-slate-500">
+                              score {citation.score.toFixed(3)}
+                            </span>
+                          </a>
+                        );
+                      })}
                     </div>
                   ) : null}
                 </article>
