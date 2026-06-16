@@ -6,6 +6,14 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n{2,}")
 _WORD_RE = re.compile(r"[a-zA-Z0-9_À-ÿ]{3,}")
 
 
+def filter_chunks_by_min_score(
+    chunks: list[RetrievedChunk],
+    *,
+    min_score: float,
+) -> list[RetrievedChunk]:
+    return [chunk for chunk in chunks if chunk.score >= min_score]
+
+
 def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> str:
     if not chunks:
         return "I could not find indexed documentation that answers this question."

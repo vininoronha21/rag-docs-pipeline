@@ -91,7 +91,10 @@ Default local mode:
 ```bash
 EMBEDDING_PROVIDER=local
 LLM_PROVIDER=extractive
+RETRIEVAL_MIN_SCORE=0.0
 ```
+
+`RETRIEVAL_MIN_SCORE` filters weak vector matches before answer generation. Increase it when the app should prefer saying no indexed documentation matched over answering from low-similarity chunks.
 
 OpenAI embeddings:
 

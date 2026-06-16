@@ -18,7 +18,7 @@ from app.schemas import (
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.rag import build_extractive_answer
+from app.services.rag import build_extractive_answer, filter_chunks_by_min_score
 from app.services.repositories import (
     list_queries,
     log_query,
@@ -73,6 +73,7 @@ async def ingest_github(
 async def query_docs(
     payload: QueryRequest,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> QueryResponse:
     query_embedding = await embeddings.embed_query(payload.question)
@@ -82,6 +83,7 @@ async def query_docs(
         top_k=payload.top_k,
         source=payload.source,
     )
+    chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
     answer = build_extractive_answer(payload.question, chunks)
     chunk_ids = [chunk.id for chunk in chunks]
     query_log = await log_query(
