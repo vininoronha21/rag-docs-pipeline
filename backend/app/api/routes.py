@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -9,13 +9,15 @@ from app.schemas import (
     HealthResponse,
     IngestedDocument,
     IngestResponse,
+    QueryFeedbackRequest,
+    QueryFeedbackResponse,
     QueryRequest,
     QueryResponse,
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
 from app.services.rag import build_extractive_answer
-from app.services.repositories import log_query, retrieve_chunks
+from app.services.repositories import log_query, retrieve_chunks, update_query_feedback
 
 router = APIRouter()
 
@@ -75,7 +77,7 @@ async def query_docs(
     )
     answer = build_extractive_answer(payload.question, chunks)
     chunk_ids = [chunk.id for chunk in chunks]
-    await log_query(
+    query_log = await log_query(
         session,
         question=payload.question,
         retrieved_chunk_ids=chunk_ids,
@@ -84,6 +86,7 @@ async def query_docs(
     await session.commit()
 
     return QueryResponse(
+        query_id=query_log.id,
         answer=answer,
         retrieved_chunk_ids=chunk_ids,
         citations=[
@@ -97,3 +100,23 @@ async def query_docs(
             for chunk in chunks
         ],
     )
+
+
+@router.patch("/queries/{query_id}/feedback", response_model=QueryFeedbackResponse)
+async def record_query_feedback(
+    query_id: int,
+    payload: QueryFeedbackRequest,
+    session: AsyncSession = Depends(get_session),
+) -> QueryFeedbackResponse:
+    query = await update_query_feedback(
+        session,
+        query_id=query_id,
+        feedback=payload.feedback,
+    )
+    if query is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Query not found.",
+        )
+    await session.commit()
+    return QueryFeedbackResponse(query_id=query.id, feedback=query.user_feedback)

@@ -132,3 +132,17 @@ async def log_query(
     session.add(query)
     await session.flush()
     return query
+
+
+async def update_query_feedback(
+    session: AsyncSession,
+    *,
+    query_id: int,
+    feedback: int,
+) -> QueryLog | None:
+    query = await session.get(QueryLog, query_id)
+    if query is None:
+        return None
+    query.user_feedback = feedback
+    await session.flush()
+    return query

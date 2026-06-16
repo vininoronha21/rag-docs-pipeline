@@ -7,6 +7,7 @@ export type Citation = {
 };
 
 export type QueryResponse = {
+  query_id: number;
   answer: string;
   citations: Citation[];
   retrieved_chunk_ids: number[];

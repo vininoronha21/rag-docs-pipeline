@@ -49,6 +49,20 @@ class Citation(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    query_id: int
     answer: str
     citations: list[Citation]
     retrieved_chunk_ids: list[int]
+
+
+class QueryFeedbackRequest(BaseModel):
+    feedback: int = Field(
+        ge=-1,
+        le=1,
+        description="Feedback score: -1 negative, 0 neutral/reset, 1 positive.",
+    )
+
+
+class QueryFeedbackResponse(BaseModel):
+    query_id: int
+    feedback: int
