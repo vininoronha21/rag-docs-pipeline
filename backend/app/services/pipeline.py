@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.services.chunking import split_markdown
+from app.services.chunking import deduplicate_chunks, split_markdown
 from app.services.embeddings import EmbeddingProvider
 from app.services.github import GithubClient
 from app.services.markdown import clean_markdown, extract_title
@@ -45,7 +45,7 @@ async def ingest_github_repository(
         if not cleaned:
             continue
         title = extract_title(cleaned, fallback=file.path.rsplit("/", maxsplit=1)[-1])
-        chunks = split_markdown(cleaned, source_path=file.path)
+        chunks = deduplicate_chunks(split_markdown(cleaned, source_path=file.path))
         vectors = await embeddings.embed_texts([chunk.text for chunk in chunks])
         await upsert_document_with_chunks(
             session,

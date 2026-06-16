@@ -1,4 +1,4 @@
-from app.services.chunking import split_markdown
+from app.services.chunking import Chunk, chunk_content_hash, deduplicate_chunks, split_markdown
 
 
 def test_split_markdown_preserves_heading_metadata() -> None:
@@ -16,3 +16,20 @@ def test_split_markdown_splits_large_sections() -> None:
 
     assert len(chunks) > 1
     assert all(len(chunk.text) <= 360 for chunk in chunks)
+
+
+def test_chunk_hash_normalizes_whitespace() -> None:
+    assert chunk_content_hash("Run   the command") == chunk_content_hash("Run the\ncommand")
+
+
+def test_deduplicate_chunks_preserves_order_and_reindexes() -> None:
+    chunks = [
+        Chunk(text="Install", index=3, metadata={}, content_hash=chunk_content_hash("Install")),
+        Chunk(text="Usage", index=4, metadata={}, content_hash=chunk_content_hash("Usage")),
+        Chunk(text="Install", index=5, metadata={}, content_hash=chunk_content_hash("Install")),
+    ]
+
+    unique_chunks = deduplicate_chunks(chunks)
+
+    assert [chunk.text for chunk in unique_chunks] == ["Install", "Usage"]
+    assert [chunk.index for chunk in unique_chunks] == [0, 1]

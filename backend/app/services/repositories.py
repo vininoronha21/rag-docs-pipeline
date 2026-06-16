@@ -58,6 +58,7 @@ async def upsert_document_with_chunks(
                 document_id=document.id,
                 chunk_text=chunk.text,
                 chunk_index=chunk.index,
+                chunk_hash=chunk.content_hash,
                 embedding=embedding,
                 chunk_metadata=chunk.metadata,
             )
