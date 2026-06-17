@@ -27,6 +27,8 @@ type Message = {
   queryId?: number;
   feedback?: -1 | 0 | 1;
   citations?: QueryResponse["citations"];
+  latencyMs?: number;
+  retrievedChunkCount?: number;
 };
 
 function citationMetadata(citation: QueryResponse["citations"][number]) {
@@ -76,7 +78,9 @@ export function ChatShell() {
         role: "assistant",
         content: item.answer,
         queryId: item.id,
-        feedback: item.feedback ?? undefined
+        feedback: item.feedback ?? undefined,
+        latencyMs: item.latency_ms,
+        retrievedChunkCount: item.retrieved_chunk_count
       }
     ]);
   }
@@ -117,7 +121,9 @@ export function ChatShell() {
           role: "assistant",
           content: response.answer,
           queryId: response.query_id,
-          citations: response.citations
+          citations: response.citations,
+          latencyMs: response.latency_ms,
+          retrievedChunkCount: response.retrieved_chunk_count
         }
       ]);
       void loadHistory();
@@ -234,6 +240,10 @@ export function ChatShell() {
                       hour: "2-digit",
                       minute: "2-digit"
                     }).format(new Date(item.created_at))}
+                    {" · "}
+                    {item.latency_ms}ms
+                    {" · "}
+                    {item.retrieved_chunk_count} chunks
                   </span>
                 </button>
               ))}
@@ -293,6 +303,21 @@ export function ChatShell() {
                       >
                         <ThumbsDown size={15} />
                       </button>
+                    </div>
+                  ) : null}
+                  {message.role === "assistant" &&
+                  (message.latencyMs !== undefined || message.retrievedChunkCount !== undefined) ? (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                      {message.latencyMs !== undefined ? (
+                        <span className="rounded-md bg-slate-100 px-2 py-1">
+                          {message.latencyMs}ms
+                        </span>
+                      ) : null}
+                      {message.retrievedChunkCount !== undefined ? (
+                        <span className="rounded-md bg-slate-100 px-2 py-1">
+                          {message.retrievedChunkCount} chunks
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                   {message.citations && message.citations.length > 0 ? (
