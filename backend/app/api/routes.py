@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas import (
+    AnalyticsSummaryResponse,
     Citation,
     DocSourceItem,
     DocSourceListResponse,
@@ -30,6 +31,7 @@ from app.services.rag import (
     filter_prompt_injection_chunks,
 )
 from app.services.repositories import (
+    get_analytics_summary,
     list_doc_sources,
     list_queries,
     log_query,
@@ -48,6 +50,23 @@ def get_embedding_provider(settings: Settings = Depends(get_settings)) -> Embedd
 @router.get("/health", response_model=HealthResponse)
 async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name, environment=settings.environment)
+
+
+@router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
+async def analytics_summary(
+    session: AsyncSession = Depends(get_session),
+) -> AnalyticsSummaryResponse:
+    summary = await get_analytics_summary(session)
+    return AnalyticsSummaryResponse(
+        document_count=summary.document_count,
+        chunk_count=summary.chunk_count,
+        source_count=summary.source_count,
+        enabled_source_count=summary.enabled_source_count,
+        query_count=summary.query_count,
+        average_latency_ms=summary.average_latency_ms,
+        positive_feedback_count=summary.positive_feedback_count,
+        negative_feedback_count=summary.negative_feedback_count,
+    )
 
 
 @router.post("/ingest/github", response_model=IngestResponse)

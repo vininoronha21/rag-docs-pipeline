@@ -60,7 +60,8 @@ Set `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000` when the backend is not runn
 3. `POST /api/query` embeds the question, retrieves top-k chunks by cosine distance, filters unsafe instruction-override text, and returns an extractive answer with citations and query metrics.
 4. `GET /api/sources` returns indexed document sources and their last sync time.
 5. `PATCH /api/sources/{source_id}` enables or disables an indexed source.
-6. `GET /api/queries` returns paginated query history with answers, citation ids, feedback, latency, retrieval counts, and timestamps.
+6. `GET /api/analytics/summary` returns aggregate document, chunk, source, query, latency, and feedback metrics.
+7. `GET /api/queries` returns paginated query history with answers, citation ids, feedback, latency, retrieval counts, and timestamps.
 
 Example ingestion request:
 
@@ -96,6 +97,12 @@ Example source update request:
 curl -X PATCH http://localhost:8000/api/sources/1 \
   -H "Content-Type: application/json" \
   -d '{"enabled":false}'
+```
+
+Example analytics summary request:
+
+```bash
+curl http://localhost:8000/api/analytics/summary
 ```
 
 ## Configuration
