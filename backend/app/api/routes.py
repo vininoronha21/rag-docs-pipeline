@@ -8,6 +8,8 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas import (
     Citation,
+    DocSourceItem,
+    DocSourceListResponse,
     GithubIngestRequest,
     HealthResponse,
     IngestedDocument,
@@ -23,6 +25,7 @@ from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
 from app.services.rag import build_extractive_answer, filter_chunks_by_min_score
 from app.services.repositories import (
+    list_doc_sources,
     list_queries,
     log_query,
     retrieve_chunks,
@@ -101,6 +104,23 @@ def _github_http_exception(exc: httpx.HTTPStatusError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail="GitHub returned an upstream error. Try again later.",
+    )
+
+
+@router.get("/sources", response_model=DocSourceListResponse)
+async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
+    sources = await list_doc_sources(session)
+    return DocSourceListResponse(
+        items=[
+            DocSourceItem(
+                id=source.id,
+                source_type=source.source_type,
+                source_config=source.source_config,
+                last_sync=source.last_sync,
+                enabled=source.enabled,
+            )
+            for source in sources
+        ]
     )
 
 

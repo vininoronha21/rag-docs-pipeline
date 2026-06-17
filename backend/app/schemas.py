@@ -35,6 +35,18 @@ class IngestResponse(BaseModel):
     total_chunks: int
 
 
+class DocSourceItem(BaseModel):
+    id: int
+    source_type: str
+    source_config: dict[str, Any]
+    last_sync: datetime | None
+    enabled: bool
+
+
+class DocSourceListResponse(BaseModel):
+    items: list[DocSourceItem]
+
+
 class QueryRequest(BaseModel):
     question: str = Field(min_length=2)
     top_k: int = Field(default=5, ge=1, le=12)

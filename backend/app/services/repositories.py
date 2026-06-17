@@ -1,10 +1,11 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Document, DocumentChunk, QueryLog
+from app.db.models import DocSource, Document, DocumentChunk, QueryLog
 from app.services.chunking import Chunk
 
 
@@ -66,6 +67,41 @@ async def upsert_document_with_chunks(
 
     await session.flush()
     return document
+
+
+async def upsert_doc_source(
+    session: AsyncSession,
+    *,
+    source_type: str,
+    source_config: dict[str, Any],
+    last_sync: datetime,
+    enabled: bool = True,
+) -> DocSource:
+    source = await session.scalar(
+        select(DocSource).where(
+            DocSource.source_type == source_type,
+            DocSource.source_config == source_config,
+        )
+    )
+    if source is None:
+        source = DocSource(
+            source_type=source_type,
+            source_config=source_config,
+            last_sync=last_sync,
+            enabled=enabled,
+        )
+        session.add(source)
+    else:
+        source.last_sync = last_sync
+        source.enabled = enabled
+
+    await session.flush()
+    return source
+
+
+async def list_doc_sources(session: AsyncSession) -> list[DocSource]:
+    result = await session.scalars(select(DocSource).order_by(DocSource.last_sync.desc()))
+    return list(result.all())
 
 
 async def retrieve_chunks(

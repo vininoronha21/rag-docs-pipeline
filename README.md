@@ -58,7 +58,8 @@ Set `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000` when the backend is not runn
 1. `POST /api/ingest/github` indexes Markdown files from a GitHub repository.
 2. The backend cleans Markdown, chunks by headings and size, creates embeddings, and stores chunks in pgvector.
 3. `POST /api/query` embeds the question, retrieves top-k chunks by cosine distance, and returns an extractive answer with citations and query metrics.
-4. `GET /api/queries` returns paginated query history with answers, citation ids, feedback, latency, retrieval counts, and timestamps.
+4. `GET /api/sources` returns indexed document sources and their last sync time.
+5. `GET /api/queries` returns paginated query history with answers, citation ids, feedback, latency, retrieval counts, and timestamps.
 
 Example ingestion request:
 
@@ -80,6 +81,12 @@ Example query history request:
 
 ```bash
 curl "http://localhost:8000/api/queries?limit=20&offset=0"
+```
+
+Example source list request:
+
+```bash
+curl http://localhost:8000/api/sources
 ```
 
 ## Configuration
