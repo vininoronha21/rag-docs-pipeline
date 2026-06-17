@@ -104,6 +104,20 @@ async def list_doc_sources(session: AsyncSession) -> list[DocSource]:
     return list(result.all())
 
 
+async def update_doc_source_enabled(
+    session: AsyncSession,
+    *,
+    source_id: int,
+    enabled: bool,
+) -> DocSource | None:
+    source = await session.get(DocSource, source_id)
+    if source is None:
+        return None
+    source.enabled = enabled
+    await session.flush()
+    return source
+
+
 async def retrieve_chunks(
     session: AsyncSession,
     *,

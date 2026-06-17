@@ -10,6 +10,7 @@ from app.schemas import (
     Citation,
     DocSourceItem,
     DocSourceListResponse,
+    DocSourceUpdateRequest,
     GithubIngestRequest,
     HealthResponse,
     IngestedDocument,
@@ -29,6 +30,7 @@ from app.services.repositories import (
     list_queries,
     log_query,
     retrieve_chunks,
+    update_doc_source_enabled,
     update_query_feedback,
 )
 
@@ -121,6 +123,32 @@ async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSource
             )
             for source in sources
         ]
+    )
+
+
+@router.patch("/sources/{source_id}", response_model=DocSourceItem)
+async def update_doc_source(
+    source_id: int,
+    payload: DocSourceUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+) -> DocSourceItem:
+    source = await update_doc_source_enabled(
+        session,
+        source_id=source_id,
+        enabled=payload.enabled,
+    )
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document source not found.",
+        )
+    await session.commit()
+    return DocSourceItem(
+        id=source.id,
+        source_type=source.source_type,
+        source_config=source.source_config,
+        last_sync=source.last_sync,
+        enabled=source.enabled,
     )
 
 
