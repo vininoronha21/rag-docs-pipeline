@@ -24,7 +24,11 @@ from app.schemas import (
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.rag import build_extractive_answer, filter_chunks_by_min_score
+from app.services.rag import (
+    build_extractive_answer,
+    filter_chunks_by_min_score,
+    filter_prompt_injection_chunks,
+)
 from app.services.repositories import (
     list_doc_sources,
     list_queries,
@@ -168,6 +172,7 @@ async def query_docs(
         source=payload.source,
     )
     chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
+    chunks = filter_prompt_injection_chunks(chunks)
     answer = build_extractive_answer(payload.question, chunks)
     chunk_ids = [chunk.id for chunk in chunks]
     latency_ms = round((time.perf_counter() - started_at) * 1000)
