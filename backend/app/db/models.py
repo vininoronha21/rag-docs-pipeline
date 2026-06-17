@@ -29,6 +29,9 @@ class Document(Base, TimestampMixin):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("doc_sources.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     source: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     title: Mapped[str | None] = mapped_column(String(255))
@@ -40,6 +43,7 @@ class Document(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    doc_source: Mapped["DocSource | None"] = relationship(back_populates="documents")
 
 
 class DocumentChunk(Base):
@@ -89,3 +93,5 @@ class DocSource(Base):
     source_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    documents: Mapped[list[Document]] = relationship(back_populates="doc_source")

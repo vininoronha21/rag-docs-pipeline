@@ -44,10 +44,12 @@ async def upsert_document_with_chunks(
     metadata: dict[str, Any],
     chunks: list[Chunk],
     embeddings: list[list[float]],
+    doc_source_id: int | None = None,
 ) -> Document:
     existing = await session.scalar(select(Document).where(Document.source_url == source_url))
     if existing is None:
         document = Document(
+            doc_source_id=doc_source_id,
             source=source,
             source_url=source_url,
             title=title,
@@ -58,6 +60,7 @@ async def upsert_document_with_chunks(
         await session.flush()
     else:
         document = existing
+        document.doc_source_id = doc_source_id
         document.source = source
         document.title = title
         document.content = content
@@ -180,7 +183,9 @@ async def retrieve_chunks(
             1 - (dc.embedding <=> (:embedding)::vector) AS score
         FROM document_chunks dc
         JOIN documents d ON d.id = dc.document_id
+        LEFT JOIN doc_sources ds ON ds.id = d.doc_source_id
         WHERE true {source_clause}
+          AND (d.doc_source_id IS NULL OR ds.enabled IS TRUE)
         ORDER BY dc.embedding <=> (:embedding)::vector
         LIMIT :top_k
         """
