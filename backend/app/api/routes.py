@@ -1,3 +1,6 @@
+import time
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,6 +8,8 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas import (
     Citation,
+    DocSourceItem,
+    DocSourceListResponse,
     GithubIngestRequest,
     HealthResponse,
     IngestedDocument,
@@ -18,8 +23,9 @@ from app.schemas import (
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.rag import build_extractive_answer
+from app.services.rag import build_extractive_answer, filter_chunks_by_min_score
 from app.services.repositories import (
+    list_doc_sources,
     list_queries,
     log_query,
     retrieve_chunks,
@@ -45,15 +51,29 @@ async def ingest_github(
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> IngestResponse:
-    repository, results = await ingest_github_repository(
-        session,
-        settings=settings,
-        embeddings=embeddings,
-        repo_url=str(payload.repo_url),
-        branch=payload.branch,
-        path=payload.path,
-        max_files=payload.max_files,
-    )
+    try:
+        repository, results = await ingest_github_repository(
+            session,
+            settings=settings,
+            embeddings=embeddings,
+            repo_url=str(payload.repo_url),
+            branch=payload.branch,
+            path=payload.path,
+            max_files=payload.max_files,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        raise _github_http_exception(exc) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach GitHub. Try again later.",
+        ) from exc
+
     documents = [
         IngestedDocument(
             source_url=result.source_url,
@@ -69,12 +89,49 @@ async def ingest_github(
     )
 
 
+def _github_http_exception(exc: httpx.HTTPStatusError) -> HTTPException:
+    status_code = exc.response.status_code
+    if status_code == status.HTTP_404_NOT_FOUND:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="GitHub repository, branch, or path was not found.",
+        )
+    if status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub rejected the request. Check credentials or rate limits.",
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="GitHub returned an upstream error. Try again later.",
+    )
+
+
+@router.get("/sources", response_model=DocSourceListResponse)
+async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
+    sources = await list_doc_sources(session)
+    return DocSourceListResponse(
+        items=[
+            DocSourceItem(
+                id=source.id,
+                source_type=source.source_type,
+                source_config=source.source_config,
+                last_sync=source.last_sync,
+                enabled=source.enabled,
+            )
+            for source in sources
+        ]
+    )
+
+
 @router.post("/query", response_model=QueryResponse)
 async def query_docs(
     payload: QueryRequest,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> QueryResponse:
+    started_at = time.perf_counter()
     query_embedding = await embeddings.embed_query(payload.question)
     chunks = await retrieve_chunks(
         session,
@@ -82,13 +139,17 @@ async def query_docs(
         top_k=payload.top_k,
         source=payload.source,
     )
+    chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
     answer = build_extractive_answer(payload.question, chunks)
     chunk_ids = [chunk.id for chunk in chunks]
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
     query_log = await log_query(
         session,
         question=payload.question,
         retrieved_chunk_ids=chunk_ids,
         answer=answer,
+        latency_ms=latency_ms,
+        retrieved_chunk_count=len(chunk_ids),
     )
     await session.commit()
 
@@ -96,6 +157,8 @@ async def query_docs(
         query_id=query_log.id,
         answer=answer,
         retrieved_chunk_ids=chunk_ids,
+        latency_ms=query_log.latency_ms,
+        retrieved_chunk_count=query_log.retrieved_chunk_count,
         citations=[
             Citation(
                 chunk_id=chunk.id,
@@ -124,6 +187,8 @@ async def query_history(
                 answer=query.llm_response,
                 retrieved_chunk_ids=query.retrieved_chunks_ids,
                 feedback=query.user_feedback,
+                latency_ms=query.latency_ms,
+                retrieved_chunk_count=query.retrieved_chunk_count,
                 created_at=query.created_at,
             )
             for query in queries

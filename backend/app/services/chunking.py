@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass
 
 
@@ -6,6 +7,7 @@ class Chunk:
     text: str
     index: int
     metadata: dict[str, str | int | None]
+    content_hash: str
 
 
 def split_markdown(
@@ -31,10 +33,36 @@ def split_markdown(
                         text=clean,
                         index=len(chunks),
                         metadata={"section": heading, "source_path": source_path},
+                        content_hash=chunk_content_hash(clean),
                     )
                 )
 
     return chunks
+
+
+def deduplicate_chunks(chunks: list[Chunk]) -> list[Chunk]:
+    seen: set[str] = set()
+    unique_chunks: list[Chunk] = []
+
+    for chunk in chunks:
+        if chunk.content_hash in seen:
+            continue
+        seen.add(chunk.content_hash)
+        unique_chunks.append(
+            Chunk(
+                text=chunk.text,
+                index=len(unique_chunks),
+                metadata=chunk.metadata,
+                content_hash=chunk.content_hash,
+            )
+        )
+
+    return unique_chunks
+
+
+def chunk_content_hash(text: str) -> str:
+    normalized = " ".join(text.split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _split_sections(content: str) -> list[tuple[str, str | None]]:

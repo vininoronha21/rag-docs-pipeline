@@ -31,6 +31,12 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["extractive", "openai"] = "extractive"
     openai_chat_model: str = "gpt-4.1-mini"
+    retrieval_min_score: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Minimum pgvector cosine similarity score required before answering.",
+    )
 
     allowed_origins: list[str] = [
         "http://localhost:3000",

@@ -11,6 +11,8 @@ export type QueryResponse = {
   answer: string;
   citations: Citation[];
   retrieved_chunk_ids: number[];
+  latency_ms: number;
+  retrieved_chunk_count: number;
 };
 
 export type QueryHistoryItem = {
@@ -19,6 +21,8 @@ export type QueryHistoryItem = {
   answer: string;
   retrieved_chunk_ids: number[];
   feedback: -1 | 0 | 1 | null;
+  latency_ms: number;
+  retrieved_chunk_count: number;
   created_at: string;
 };
 
