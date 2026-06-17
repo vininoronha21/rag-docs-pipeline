@@ -16,6 +16,8 @@ async def test_query_history_returns_paginated_query_logs(monkeypatch: pytest.Mo
         retrieved_chunks_ids=[3, 4],
         llm_response="FastAPI is a Python web framework.",
         user_feedback=1,
+        latency_ms=37,
+        retrieved_chunk_count=2,
         created_at=created_at,
     )
 
@@ -39,6 +41,8 @@ async def test_query_history_returns_paginated_query_logs(monkeypatch: pytest.Mo
                 "answer": "FastAPI is a Python web framework.",
                 "retrieved_chunk_ids": [3, 4],
                 "feedback": 1,
+                "latency_ms": 37,
+                "retrieved_chunk_count": 2,
                 "created_at": created_at,
             }
         ],

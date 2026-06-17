@@ -74,6 +74,8 @@ class QueryLog(Base):
     retrieved_chunks_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
     llm_response: Mapped[str] = mapped_column(Text, nullable=False)
     user_feedback: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    retrieved_chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

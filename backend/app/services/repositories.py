@@ -124,11 +124,15 @@ async def log_query(
     question: str,
     retrieved_chunk_ids: list[int],
     answer: str,
+    latency_ms: int,
+    retrieved_chunk_count: int,
 ) -> QueryLog:
     query = QueryLog(
         user_query=question,
         retrieved_chunks_ids=retrieved_chunk_ids,
         llm_response=answer,
+        latency_ms=latency_ms,
+        retrieved_chunk_count=retrieved_chunk_count,
     )
     session.add(query)
     await session.flush()

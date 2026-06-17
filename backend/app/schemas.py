@@ -54,6 +54,8 @@ class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
     retrieved_chunk_ids: list[int]
+    latency_ms: int
+    retrieved_chunk_count: int
 
 
 class QueryFeedbackRequest(BaseModel):
@@ -75,6 +77,8 @@ class QueryHistoryItem(BaseModel):
     answer: str
     retrieved_chunk_ids: list[int]
     feedback: int | None
+    latency_ms: int
+    retrieved_chunk_count: int
     created_at: datetime
 
 
