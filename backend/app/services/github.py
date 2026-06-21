@@ -24,6 +24,10 @@ class GithubRepo:
     default_branch: str
 
 
+class GithubClientError(RuntimeError):
+    """Raised when GitHub returns a response that cannot be parsed safely."""
+
+
 class GithubClient:
     def __init__(self, settings: Settings) -> None:
         headers = {
@@ -47,12 +51,26 @@ class GithubClient:
         owner, name = parse_repo_url(repo_url)
         response = await self._client.get(f"/repos/{owner}/{name}")
         response.raise_for_status()
-        payload = response.json()
+        payload = _response_json(
+            response,
+            error_message="GitHub returned an invalid repository response. Try again later.",
+        )
+        try:
+            full_name = payload["full_name"]
+            default_branch = payload["default_branch"]
+        except (KeyError, TypeError) as exc:
+            raise GithubClientError(
+                "GitHub returned an invalid repository response. Try again later."
+            ) from exc
+        if not isinstance(full_name, str) or not isinstance(default_branch, str):
+            raise GithubClientError(
+                "GitHub returned an invalid repository response. Try again later."
+            )
         return GithubRepo(
             owner=owner,
             name=name,
-            full_name=payload["full_name"],
-            default_branch=payload["default_branch"],
+            full_name=full_name,
+            default_branch=default_branch,
         )
 
     async def fetch_markdown_files(
@@ -67,14 +85,31 @@ class GithubClient:
         entries = await self._walk_contents(repo.owner, repo.name, path, ref, max_files=max_files)
         files: list[GithubFile] = []
         for entry in entries[:max_files]:
-            raw = await self._client.get(entry["download_url"])
+            try:
+                entry_path = entry["path"]
+                entry_sha = entry["sha"]
+                entry_html_url = entry["html_url"]
+                entry_download_url = entry["download_url"]
+            except (KeyError, TypeError) as exc:
+                raise GithubClientError(
+                    "GitHub returned an invalid file response. Try again later."
+                ) from exc
+            if not all(
+                isinstance(value, str)
+                for value in (entry_path, entry_sha, entry_html_url, entry_download_url)
+            ):
+                raise GithubClientError(
+                    "GitHub returned an invalid file response. Try again later."
+                )
+
+            raw = await self._client.get(entry_download_url)
             raw.raise_for_status()
             files.append(
                 GithubFile(
-                    path=entry["path"],
-                    sha=entry["sha"],
-                    html_url=entry["html_url"],
-                    download_url=entry["download_url"],
+                    path=entry_path,
+                    sha=entry_sha,
+                    html_url=entry_html_url,
+                    download_url=entry_download_url,
                     content=raw.text,
                 )
             )
@@ -94,21 +129,43 @@ class GithubClient:
             params={"ref": ref},
         )
         response.raise_for_status()
-        payload = response.json()
-        items = payload if isinstance(payload, list) else [payload]
+        payload = _response_json(
+            response,
+            error_message="GitHub returned an invalid contents response. Try again later.",
+        )
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            items = [payload]
+        else:
+            raise GithubClientError(
+                "GitHub returned an invalid contents response. Try again later."
+            )
         markdown_files: list[dict[str, Any]] = []
 
         for item in items:
             if len(markdown_files) >= max_files:
                 break
-            if item["type"] == "file" and item["name"].lower().endswith((".md", ".mdx")):
+            try:
+                item_type = item["type"]
+                item_path = item["path"]
+            except (KeyError, TypeError) as exc:
+                raise GithubClientError(
+                    "GitHub returned an invalid contents response. Try again later."
+                ) from exc
+            if not isinstance(item_type, str) or not isinstance(item_path, str):
+                raise GithubClientError(
+                    "GitHub returned an invalid contents response. Try again later."
+                )
+
+            if item_type == "file" and _is_markdown_file(item):
                 markdown_files.append(item)
-            elif item["type"] == "dir" and _is_documentation_path(item["path"]):
+            elif item_type == "dir" and _is_documentation_path(item_path):
                 markdown_files.extend(
                     await self._walk_contents(
                         owner,
                         repo,
-                        item["path"],
+                        item_path,
                         ref,
                         max_files=max_files - len(markdown_files),
                     )
@@ -123,6 +180,27 @@ def parse_repo_url(repo_url: str) -> tuple[str, str]:
     if parsed.netloc.lower() != "github.com" or len(parts) < 2:
         raise ValueError("Expected a GitHub repository URL like https://github.com/owner/repo")
     return parts[0], parts[1].removesuffix(".git")
+
+
+def _response_json(response: httpx.Response, *, error_message: str) -> Any:
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise GithubClientError(error_message) from exc
+
+
+def _is_markdown_file(item: dict[str, Any]) -> bool:
+    try:
+        name = item["name"]
+    except KeyError as exc:
+        raise GithubClientError(
+            "GitHub returned an invalid contents response. Try again later."
+        ) from exc
+    if not isinstance(name, str):
+        raise GithubClientError(
+            "GitHub returned an invalid contents response. Try again later."
+        )
+    return name.lower().endswith((".md", ".mdx"))
 
 
 def _is_documentation_path(path: str) -> bool:

@@ -21,10 +21,15 @@ class EmbeddingProvider(ABC):
         return (await self.embed_texts([text]))[0]
 
 
+class EmbeddingProviderError(RuntimeError):
+    """Raised when an external embedding provider cannot complete a request."""
+
+
 class LocalHashEmbeddingProvider(EmbeddingProvider):
     """Deterministic bag-of-words embeddings for zero-cost local development."""
 
     def __init__(self, dimensions: int) -> None:
+        _validate_dimensions(dimensions)
         self.dimensions = dimensions
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -46,21 +51,68 @@ class LocalHashEmbeddingProvider(EmbeddingProvider):
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     def __init__(self, api_key: str, model: str, dimensions: int) -> None:
+        _validate_dimensions(dimensions)
         self.api_key = api_key
         self.model = model
         self.dimensions = dimensions
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": texts, "dimensions": self.dimensions},
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": self.model, "input": texts, "dimensions": self.dimensions},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an upstream error. Try again later."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise EmbeddingProviderError(
+                "Could not reach embedding provider. Try again later."
+            ) from exc
+        except ValueError as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an invalid response. Try again later."
+            ) from exc
+        try:
+            sorted_items = sorted(payload["data"], key=lambda item: item["index"])
+            embeddings = [item["embedding"] for item in sorted_items]
+        except (KeyError, TypeError) as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an invalid response. Try again later."
+            ) from exc
+        if len(embeddings) != len(texts):
+            raise EmbeddingProviderError(
+                "Embedding provider returned an unexpected number of embeddings. Try again later."
             )
-            response.raise_for_status()
-            payload = response.json()
-        sorted_items = sorted(payload["data"], key=lambda item: item["index"])
-        return [item["embedding"] for item in sorted_items]
+        for embedding in embeddings:
+            _validate_embedding_vector(embedding, dimensions=self.dimensions)
+        return embeddings
+
+
+def _validate_dimensions(dimensions: int) -> None:
+    if dimensions < 1:
+        raise ValueError("Embedding dimensions must be greater than zero.")
+
+
+def _validate_embedding_vector(embedding: object, *, dimensions: int) -> None:
+    if not isinstance(embedding, list) or not all(_is_number(value) for value in embedding):
+        raise EmbeddingProviderError(
+            "Embedding provider returned invalid embedding vectors. Try again later."
+        )
+    if len(embedding) != dimensions:
+        raise EmbeddingProviderError(
+            "Embedding provider returned embeddings with unexpected dimensions. "
+            "Try again later."
+        )
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def build_embedding_provider(settings: Settings) -> EmbeddingProvider:

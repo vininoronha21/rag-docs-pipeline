@@ -46,6 +46,9 @@ async def upsert_document_with_chunks(
     embeddings: list[list[float]],
     doc_source_id: int | None = None,
 ) -> Document:
+    if len(chunks) != len(embeddings):
+        raise ValueError("Expected one embedding per chunk.")
+
     existing = await session.scalar(select(Document).where(Document.source_url == source_url))
     if existing is None:
         document = Document(

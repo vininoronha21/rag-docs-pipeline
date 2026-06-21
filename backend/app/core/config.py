@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     github_user_agent: str = "rag-docs-pipeline"
 
     embedding_provider: Literal["local", "openai"] = "local"
-    embedding_dimensions: int = 1536
+    embedding_dimensions: int = Field(
+        default=1536,
+        ge=1,
+        description="Embedding vector dimensions used by providers and pgvector columns.",
+    )
     openai_api_key: str | None = None
     openai_embedding_model: str = "text-embedding-3-small"
 
