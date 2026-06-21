@@ -40,7 +40,13 @@ router = APIRouter()
 
 
 def get_embedding_provider(settings: Settings = Depends(get_settings)) -> EmbeddingProvider:
-    return build_embedding_provider(settings)
+    try:
+        return build_embedding_provider(settings)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Embedding provider is not configured correctly: {exc}",
+        ) from exc
 
 
 @router.get("/health", response_model=HealthResponse)

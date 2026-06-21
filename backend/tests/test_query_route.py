@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException, status
 
 from app.api import routes
+from app.core.config import Settings
 from app.schemas import QueryRequest
 from app.services.embeddings import EmbeddingProviderError
 from app.services.querying import QueryExecutionResult
@@ -22,6 +23,21 @@ def make_chunk(chunk_id: int, score: float, text: str) -> RetrievedChunk:
         source="github",
         score=score,
     )
+
+
+def test_get_embedding_provider_returns_server_error_for_invalid_configuration() -> None:
+    settings = Settings(
+        embedding_provider="openai",
+        openai_api_key=None,
+        _env_file=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        routes.get_embedding_provider(settings=settings)
+
+    assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert "Embedding provider is not configured correctly" in exc_info.value.detail
+    assert "OPENAI_API_KEY is required" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
