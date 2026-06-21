@@ -85,6 +85,35 @@ async def test_openai_embeddings_wrap_invalid_response_payload(
 
 
 @pytest.mark.asyncio
+async def test_openai_embeddings_wrap_invalid_json_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["timeout"] == 30
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def post(self, *args: object, **kwargs: object) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+            return httpx.Response(200, content=b"not-json", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-3-small",
+        dimensions=1536,
+    )
+
+    with pytest.raises(EmbeddingProviderError, match="invalid response"):
+        await provider.embed_texts(["hello"])
+
+
+@pytest.mark.asyncio
 async def test_openai_embeddings_reject_unexpected_embedding_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,4 +176,37 @@ async def test_openai_embeddings_reject_unexpected_vector_dimensions(
     )
 
     with pytest.raises(EmbeddingProviderError, match="unexpected dimensions"):
+        await provider.embed_texts(["hello"])
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_reject_non_numeric_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["timeout"] == 30
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def post(self, *args: object, **kwargs: object) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+            return httpx.Response(
+                200,
+                json={"data": [{"index": 0, "embedding": [1.0, "bad"]}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-3-small",
+        dimensions=2,
+    )
+
+    with pytest.raises(EmbeddingProviderError, match="invalid embedding vectors"):
         await provider.embed_texts(["hello"])

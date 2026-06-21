@@ -74,6 +74,10 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raise EmbeddingProviderError(
                 "Could not reach embedding provider. Try again later."
             ) from exc
+        except ValueError as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an invalid response. Try again later."
+            ) from exc
         try:
             sorted_items = sorted(payload["data"], key=lambda item: item["index"])
             embeddings = [item["embedding"] for item in sorted_items]
@@ -85,17 +89,30 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raise EmbeddingProviderError(
                 "Embedding provider returned an unexpected number of embeddings. Try again later."
             )
-        if any(len(embedding) != self.dimensions for embedding in embeddings):
-            raise EmbeddingProviderError(
-                "Embedding provider returned embeddings with unexpected dimensions. "
-                "Try again later."
-            )
+        for embedding in embeddings:
+            _validate_embedding_vector(embedding, dimensions=self.dimensions)
         return embeddings
 
 
 def _validate_dimensions(dimensions: int) -> None:
     if dimensions < 1:
         raise ValueError("Embedding dimensions must be greater than zero.")
+
+
+def _validate_embedding_vector(embedding: object, *, dimensions: int) -> None:
+    if not isinstance(embedding, list) or not all(_is_number(value) for value in embedding):
+        raise EmbeddingProviderError(
+            "Embedding provider returned invalid embedding vectors. Try again later."
+        )
+    if len(embedding) != dimensions:
+        raise EmbeddingProviderError(
+            "Embedding provider returned embeddings with unexpected dimensions. "
+            "Try again later."
+        )
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
