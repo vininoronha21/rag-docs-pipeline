@@ -4,6 +4,16 @@ from app.services.repositories import RetrievedChunk
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n{2,}")
 _WORD_RE = re.compile(r"[a-zA-Z0-9_À-ÿ]{3,}")
+_PROMPT_INJECTION_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bignore\s+(all\s+)?(previous|prior|above)\s+instructions\b",
+        r"\bdisregard\s+(all\s+)?(previous|prior|above)\s+instructions\b",
+        r"\breveal\s+(the\s+)?(system|developer)\s+prompt\b",
+        r"\byou\s+are\s+now\s+(in|acting as)\b",
+        r"\bforget\s+(all\s+)?(previous|prior|above)\s+instructions\b",
+    )
+]
 
 
 def filter_chunks_by_min_score(
@@ -12,6 +22,10 @@ def filter_chunks_by_min_score(
     min_score: float,
 ) -> list[RetrievedChunk]:
     return [chunk for chunk in chunks if chunk.score >= min_score]
+
+
+def filter_prompt_injection_chunks(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    return [chunk for chunk in chunks if not _contains_prompt_injection(chunk.text)]
 
 
 def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> str:
@@ -45,3 +59,7 @@ def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> str:
 def _term_overlap(text: str, query_terms: set[str]) -> int:
     terms = {term.lower() for term in _WORD_RE.findall(text)}
     return len(terms & query_terms)
+
+
+def _contains_prompt_injection(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _PROMPT_INJECTION_PATTERNS)

@@ -47,6 +47,21 @@ class DocSourceListResponse(BaseModel):
     items: list[DocSourceItem]
 
 
+class DocSourceUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    document_count: int
+    chunk_count: int
+    source_count: int
+    enabled_source_count: int
+    query_count: int
+    average_latency_ms: float
+    positive_feedback_count: int
+    negative_feedback_count: int
+
+
 class QueryRequest(BaseModel):
     question: str = Field(min_length=2)
     top_k: int = Field(default=5, ge=1, le=12)

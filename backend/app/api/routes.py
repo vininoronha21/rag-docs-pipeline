@@ -1,5 +1,3 @@
-import time
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,9 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas import (
+    AnalyticsSummaryResponse,
     Citation,
     DocSourceItem,
     DocSourceListResponse,
+    DocSourceUpdateRequest,
     GithubIngestRequest,
     HealthResponse,
     IngestedDocument,
@@ -23,12 +23,12 @@ from app.schemas import (
 )
 from app.services.embeddings import EmbeddingProvider, build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.rag import build_extractive_answer, filter_chunks_by_min_score
+from app.services.querying import run_query
 from app.services.repositories import (
+    get_analytics_summary,
     list_doc_sources,
     list_queries,
-    log_query,
-    retrieve_chunks,
+    update_doc_source_enabled,
     update_query_feedback,
 )
 
@@ -42,6 +42,23 @@ def get_embedding_provider(settings: Settings = Depends(get_settings)) -> Embedd
 @router.get("/health", response_model=HealthResponse)
 async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name, environment=settings.environment)
+
+
+@router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
+async def analytics_summary(
+    session: AsyncSession = Depends(get_session),
+) -> AnalyticsSummaryResponse:
+    summary = await get_analytics_summary(session)
+    return AnalyticsSummaryResponse(
+        document_count=summary.document_count,
+        chunk_count=summary.chunk_count,
+        source_count=summary.source_count,
+        enabled_source_count=summary.enabled_source_count,
+        query_count=summary.query_count,
+        average_latency_ms=summary.average_latency_ms,
+        positive_feedback_count=summary.positive_feedback_count,
+        negative_feedback_count=summary.negative_feedback_count,
+    )
 
 
 @router.post("/ingest/github", response_model=IngestResponse)
@@ -124,6 +141,32 @@ async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSource
     )
 
 
+@router.patch("/sources/{source_id}", response_model=DocSourceItem)
+async def update_doc_source(
+    source_id: int,
+    payload: DocSourceUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+) -> DocSourceItem:
+    source = await update_doc_source_enabled(
+        session,
+        source_id=source_id,
+        enabled=payload.enabled,
+    )
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document source not found.",
+        )
+    await session.commit()
+    return DocSourceItem(
+        id=source.id,
+        source_type=source.source_type,
+        source_config=source.source_config,
+        last_sync=source.last_sync,
+        enabled=source.enabled,
+    )
+
+
 @router.post("/query", response_model=QueryResponse)
 async def query_docs(
     payload: QueryRequest,
@@ -131,34 +174,20 @@ async def query_docs(
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> QueryResponse:
-    started_at = time.perf_counter()
-    query_embedding = await embeddings.embed_query(payload.question)
-    chunks = await retrieve_chunks(
-        session,
-        embedding=query_embedding,
-        top_k=payload.top_k,
-        source=payload.source,
-    )
-    chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
-    answer = build_extractive_answer(payload.question, chunks)
-    chunk_ids = [chunk.id for chunk in chunks]
-    latency_ms = round((time.perf_counter() - started_at) * 1000)
-    query_log = await log_query(
+    result = await run_query(
         session,
         question=payload.question,
-        retrieved_chunk_ids=chunk_ids,
-        answer=answer,
-        latency_ms=latency_ms,
-        retrieved_chunk_count=len(chunk_ids),
+        top_k=payload.top_k,
+        source=payload.source,
+        settings=settings,
+        embeddings=embeddings,
     )
-    await session.commit()
-
     return QueryResponse(
-        query_id=query_log.id,
-        answer=answer,
-        retrieved_chunk_ids=chunk_ids,
-        latency_ms=query_log.latency_ms,
-        retrieved_chunk_count=query_log.retrieved_chunk_count,
+        query_id=result.query_id,
+        answer=result.answer,
+        retrieved_chunk_ids=result.retrieved_chunk_ids,
+        latency_ms=result.latency_ms,
+        retrieved_chunk_count=result.retrieved_chunk_count,
         citations=[
             Citation(
                 chunk_id=chunk.id,
@@ -167,7 +196,7 @@ async def query_docs(
                 score=chunk.score,
                 metadata=chunk.metadata,
             )
-            for chunk in chunks
+            for chunk in result.chunks
         ],
     )
 

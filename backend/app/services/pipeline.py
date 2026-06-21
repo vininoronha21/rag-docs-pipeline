@@ -40,6 +40,18 @@ async def ingest_github_repository(
     finally:
         await github.close()
 
+    doc_source = await upsert_doc_source(
+        session,
+        source_type="github",
+        source_config={
+            "repo": repo.full_name,
+            "branch": branch or repo.default_branch,
+            "path": path,
+        },
+        last_sync=datetime.now(UTC),
+        enabled=True,
+    )
+
     results: list[IngestedDocumentResult] = []
     for file in files:
         cleaned = clean_markdown(file.content)
@@ -52,6 +64,7 @@ async def ingest_github_repository(
             session,
             source="github",
             source_url=file.html_url,
+            doc_source_id=doc_source.id,
             title=title,
             content=cleaned,
             metadata={"repo": repo.full_name, "path": file.path, "sha": file.sha},
@@ -66,16 +79,5 @@ async def ingest_github_repository(
             )
         )
 
-    await upsert_doc_source(
-        session,
-        source_type="github",
-        source_config={
-            "repo": repo.full_name,
-            "branch": branch or repo.default_branch,
-            "path": path,
-        },
-        last_sync=datetime.now(UTC),
-        enabled=True,
-    )
     await session.commit()
     return repo.full_name, results

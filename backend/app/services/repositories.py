@@ -22,6 +22,18 @@ class RetrievedChunk:
     score: float
 
 
+@dataclass(frozen=True)
+class AnalyticsSummary:
+    document_count: int
+    chunk_count: int
+    source_count: int
+    enabled_source_count: int
+    query_count: int
+    average_latency_ms: float
+    positive_feedback_count: int
+    negative_feedback_count: int
+
+
 async def upsert_document_with_chunks(
     session: AsyncSession,
     *,
@@ -32,10 +44,12 @@ async def upsert_document_with_chunks(
     metadata: dict[str, Any],
     chunks: list[Chunk],
     embeddings: list[list[float]],
+    doc_source_id: int | None = None,
 ) -> Document:
     existing = await session.scalar(select(Document).where(Document.source_url == source_url))
     if existing is None:
         document = Document(
+            doc_source_id=doc_source_id,
             source=source,
             source_url=source_url,
             title=title,
@@ -46,6 +60,7 @@ async def upsert_document_with_chunks(
         await session.flush()
     else:
         document = existing
+        document.doc_source_id = doc_source_id
         document.source = source
         document.title = title
         document.content = content
@@ -104,6 +119,47 @@ async def list_doc_sources(session: AsyncSession) -> list[DocSource]:
     return list(result.all())
 
 
+async def update_doc_source_enabled(
+    session: AsyncSession,
+    *,
+    source_id: int,
+    enabled: bool,
+) -> DocSource | None:
+    source = await session.get(DocSource, source_id)
+    if source is None:
+        return None
+    source.enabled = enabled
+    await session.flush()
+    return source
+
+
+async def get_analytics_summary(session: AsyncSession) -> AnalyticsSummary:
+    document_count = await _count_rows(session, Document)
+    chunk_count = await _count_rows(session, DocumentChunk)
+    source_count = await _count_rows(session, DocSource)
+    enabled_source_count = await session.scalar(
+        select(func.count()).select_from(DocSource).where(DocSource.enabled.is_(True))
+    )
+    query_count = await _count_rows(session, QueryLog)
+    average_latency = await session.scalar(select(func.coalesce(func.avg(QueryLog.latency_ms), 0)))
+    positive_feedback_count = await session.scalar(
+        select(func.count()).select_from(QueryLog).where(QueryLog.user_feedback == 1)
+    )
+    negative_feedback_count = await session.scalar(
+        select(func.count()).select_from(QueryLog).where(QueryLog.user_feedback == -1)
+    )
+    return AnalyticsSummary(
+        document_count=document_count,
+        chunk_count=chunk_count,
+        source_count=source_count,
+        enabled_source_count=enabled_source_count or 0,
+        query_count=query_count,
+        average_latency_ms=round(float(average_latency or 0), 2),
+        positive_feedback_count=positive_feedback_count or 0,
+        negative_feedback_count=negative_feedback_count or 0,
+    )
+
+
 async def retrieve_chunks(
     session: AsyncSession,
     *,
@@ -127,7 +183,9 @@ async def retrieve_chunks(
             1 - (dc.embedding <=> (:embedding)::vector) AS score
         FROM document_chunks dc
         JOIN documents d ON d.id = dc.document_id
+        LEFT JOIN doc_sources ds ON ds.id = d.doc_source_id
         WHERE true {source_clause}
+          AND (d.doc_source_id IS NULL OR ds.enabled IS TRUE)
         ORDER BY dc.embedding <=> (:embedding)::vector
         LIMIT :top_k
         """
@@ -173,6 +231,14 @@ async def log_query(
     session.add(query)
     await session.flush()
     return query
+
+
+async def _count_rows(
+    session: AsyncSession,
+    model: type[Document | DocumentChunk | DocSource | QueryLog],
+) -> int:
+    count = await session.scalar(select(func.count()).select_from(model))
+    return count or 0
 
 
 async def list_queries(
