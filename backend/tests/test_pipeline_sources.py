@@ -14,7 +14,11 @@ class FakeSession:
 
 
 class FakeEmbeddings:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.texts = texts
         return [[1.0, 0.0] for _text in texts]
 
 
@@ -75,11 +79,12 @@ async def test_ingest_github_repository_links_documents_to_doc_source(
     monkeypatch.setattr(pipeline, "upsert_doc_source", fake_upsert_doc_source)
     monkeypatch.setattr(pipeline, "upsert_document_with_chunks", fake_upsert_document_with_chunks)
     session = FakeSession()
+    embeddings = FakeEmbeddings()
 
     repository, documents = await pipeline.ingest_github_repository(
         session,
         settings=object(),
-        embeddings=FakeEmbeddings(),
+        embeddings=embeddings,
         repo_url="https://github.com/example/project",
         branch=None,
         path="docs",
@@ -88,5 +93,20 @@ async def test_ingest_github_repository_links_documents_to_doc_source(
 
     assert repository == "example/project"
     assert len(documents) == 1
+    assert documents[0].title == "Install"
+    assert documents[0].chunk_count == 1
+    assert embeddings.texts == ["# Install\n\nRun the server."]
+    assert captured_document_kwargs["source"] == "github"
+    assert captured_document_kwargs["source_url"] == (
+        "https://github.com/example/project/blob/main/docs/index.md"
+    )
     assert captured_document_kwargs["doc_source_id"] == 9
+    assert captured_document_kwargs["title"] == "Install"
+    assert captured_document_kwargs["content"] == "# Install\n\nRun the server."
+    assert captured_document_kwargs["metadata"] == {
+        "repo": "example/project",
+        "path": "docs/index.md",
+        "sha": "abc123",
+    }
+    assert captured_document_kwargs["embeddings"] == [[1.0, 0.0]]
     assert session.committed is True
