@@ -1,5 +1,4 @@
 import asyncio
-import time
 from typing import Optional
 
 import typer
@@ -9,12 +8,7 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.services.embeddings import build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.rag import (
-    build_extractive_answer,
-    filter_chunks_by_min_score,
-    filter_prompt_injection_chunks,
-)
-from app.services.repositories import log_query, retrieve_chunks
+from app.services.querying import run_query
 
 cli = typer.Typer(help="RAG Docs Pipeline command line tools.")
 console = Console()
@@ -71,29 +65,16 @@ async def _run_query(
 ) -> tuple[str, int, int, int]:
     settings = get_settings()
     embeddings = build_embedding_provider(settings)
-    started_at = time.perf_counter()
-    query_embedding = await embeddings.embed_query(question)
     async with AsyncSessionLocal() as session:
-        chunks = await retrieve_chunks(
-            session,
-            embedding=query_embedding,
-            top_k=top_k,
-            source=source,
-        )
-        chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
-        chunks = filter_prompt_injection_chunks(chunks)
-        answer = build_extractive_answer(question, chunks)
-        latency_ms = round((time.perf_counter() - started_at) * 1000)
-        query_log = await log_query(
+        result = await run_query(
             session,
             question=question,
-            retrieved_chunk_ids=[chunk.id for chunk in chunks],
-            answer=answer,
-            latency_ms=latency_ms,
-            retrieved_chunk_count=len(chunks),
+            top_k=top_k,
+            source=source,
+            settings=settings,
+            embeddings=embeddings,
         )
-        await session.commit()
-    return answer, query_log.id, query_log.retrieved_chunk_count, query_log.latency_ms
+    return result.answer, result.query_id, result.retrieved_chunk_count, result.latency_ms
 
 
 if __name__ == "__main__":
