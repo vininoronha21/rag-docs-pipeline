@@ -1,6 +1,11 @@
+import httpx
 import pytest
 
-from app.services.embeddings import LocalHashEmbeddingProvider
+from app.services.embeddings import (
+    EmbeddingProviderError,
+    LocalHashEmbeddingProvider,
+    OpenAIEmbeddingProvider,
+)
 
 
 @pytest.mark.asyncio
@@ -13,3 +18,33 @@ async def test_local_embeddings_are_deterministic_and_normalized() -> None:
     assert first == second
     assert len(first) == 32
     assert sum(value * value for value in first) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_wrap_http_status_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["timeout"] == 30
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def post(self, *args: object, **kwargs: object) -> httpx.Response:
+            assert args == ("https://api.openai.com/v1/embeddings",)
+            request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+            return httpx.Response(429, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-3-small",
+        dimensions=1536,
+    )
+
+    with pytest.raises(EmbeddingProviderError, match="upstream error"):
+        await provider.embed_texts(["hello"])

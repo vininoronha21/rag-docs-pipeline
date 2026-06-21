@@ -21,7 +21,11 @@ from app.schemas import (
     QueryRequest,
     QueryResponse,
 )
-from app.services.embeddings import EmbeddingProvider, build_embedding_provider
+from app.services.embeddings import (
+    EmbeddingProvider,
+    EmbeddingProviderError,
+    build_embedding_provider,
+)
 from app.services.pipeline import ingest_github_repository
 from app.services.querying import run_query
 from app.services.repositories import (
@@ -83,6 +87,8 @@ async def ingest_github(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except EmbeddingProviderError as exc:
+        raise _embedding_provider_exception(exc) from exc
     except httpx.HTTPStatusError as exc:
         raise _github_http_exception(exc) from exc
     except httpx.RequestError as exc:
@@ -121,6 +127,13 @@ def _github_http_exception(exc: httpx.HTTPStatusError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail="GitHub returned an upstream error. Try again later.",
+    )
+
+
+def _embedding_provider_exception(exc: EmbeddingProviderError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=str(exc),
     )
 
 
@@ -174,14 +187,17 @@ async def query_docs(
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> QueryResponse:
-    result = await run_query(
-        session,
-        question=payload.question,
-        top_k=payload.top_k,
-        source=payload.source,
-        settings=settings,
-        embeddings=embeddings,
-    )
+    try:
+        result = await run_query(
+            session,
+            question=payload.question,
+            top_k=payload.top_k,
+            source=payload.source,
+            settings=settings,
+            embeddings=embeddings,
+        )
+    except EmbeddingProviderError as exc:
+        raise _embedding_provider_exception(exc) from exc
     return QueryResponse(
         query_id=result.query_id,
         answer=result.answer,

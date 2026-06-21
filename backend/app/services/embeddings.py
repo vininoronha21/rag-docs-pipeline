@@ -21,6 +21,10 @@ class EmbeddingProvider(ABC):
         return (await self.embed_texts([text]))[0]
 
 
+class EmbeddingProviderError(RuntimeError):
+    """Raised when an external embedding provider cannot complete a request."""
+
+
 class LocalHashEmbeddingProvider(EmbeddingProvider):
     """Deterministic bag-of-words embeddings for zero-cost local development."""
 
@@ -51,14 +55,23 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.dimensions = dimensions
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": texts, "dimensions": self.dimensions},
-            )
-            response.raise_for_status()
-            payload = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": self.model, "input": texts, "dimensions": self.dimensions},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an upstream error. Try again later."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise EmbeddingProviderError(
+                "Could not reach embedding provider. Try again later."
+            ) from exc
         sorted_items = sorted(payload["data"], key=lambda item: item["index"])
         return [item["embedding"] for item in sorted_items]
 
