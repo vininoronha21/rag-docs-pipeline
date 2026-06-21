@@ -72,8 +72,18 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raise EmbeddingProviderError(
                 "Could not reach embedding provider. Try again later."
             ) from exc
-        sorted_items = sorted(payload["data"], key=lambda item: item["index"])
-        return [item["embedding"] for item in sorted_items]
+        try:
+            sorted_items = sorted(payload["data"], key=lambda item: item["index"])
+            embeddings = [item["embedding"] for item in sorted_items]
+        except (KeyError, TypeError) as exc:
+            raise EmbeddingProviderError(
+                "Embedding provider returned an invalid response. Try again later."
+            ) from exc
+        if len(embeddings) != len(texts):
+            raise EmbeddingProviderError(
+                "Embedding provider returned an unexpected number of embeddings. Try again later."
+            )
+        return embeddings
 
 
 def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
