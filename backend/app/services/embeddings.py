@@ -29,6 +29,7 @@ class LocalHashEmbeddingProvider(EmbeddingProvider):
     """Deterministic bag-of-words embeddings for zero-cost local development."""
 
     def __init__(self, dimensions: int) -> None:
+        _validate_dimensions(dimensions)
         self.dimensions = dimensions
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -50,6 +51,7 @@ class LocalHashEmbeddingProvider(EmbeddingProvider):
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     def __init__(self, api_key: str, model: str, dimensions: int) -> None:
+        _validate_dimensions(dimensions)
         self.api_key = api_key
         self.model = model
         self.dimensions = dimensions
@@ -83,7 +85,17 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raise EmbeddingProviderError(
                 "Embedding provider returned an unexpected number of embeddings. Try again later."
             )
+        if any(len(embedding) != self.dimensions for embedding in embeddings):
+            raise EmbeddingProviderError(
+                "Embedding provider returned embeddings with unexpected dimensions. "
+                "Try again later."
+            )
         return embeddings
+
+
+def _validate_dimensions(dimensions: int) -> None:
+    if dimensions < 1:
+        raise ValueError("Embedding dimensions must be greater than zero.")
 
 
 def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
