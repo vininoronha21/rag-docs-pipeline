@@ -23,6 +23,13 @@ class QueryExecutionResult:
     retrieved_chunk_count: int
 
 
+def validate_query_request(*, question: str, top_k: int) -> None:
+    if len(question.strip()) < 2:
+        raise ValueError("Question must contain at least two non-whitespace characters.")
+    if top_k < 1 or top_k > 12:
+        raise ValueError("top_k must be between 1 and 12.")
+
+
 async def run_query(
     session: AsyncSession,
     *,
@@ -32,6 +39,7 @@ async def run_query(
     settings: Settings,
     embeddings: EmbeddingProvider,
 ) -> QueryExecutionResult:
+    validate_query_request(question=question, top_k=top_k)
     started_at = time.perf_counter()
     query_embedding = await embeddings.embed_query(question)
     chunks = await retrieve_chunks(

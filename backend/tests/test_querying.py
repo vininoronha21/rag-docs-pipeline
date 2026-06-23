@@ -86,3 +86,37 @@ async def test_run_query_retrieves_filters_answers_and_logs(
     assert captured_log["retrieved_chunk_ids"] == [3]
     assert captured_log["retrieved_chunk_count"] == 1
     assert session.committed is True
+
+
+@pytest.mark.asyncio
+async def test_run_query_rejects_invalid_top_k_before_embedding() -> None:
+    embeddings = FakeEmbeddings()
+
+    with pytest.raises(ValueError, match="top_k must be between 1 and 12"):
+        await querying.run_query(
+            FakeSession(),
+            question="How do I run FastAPI?",
+            top_k=0,
+            source=None,
+            settings=SimpleNamespace(retrieval_min_score=0.0),
+            embeddings=embeddings,
+        )
+
+    assert embeddings.question is None
+
+
+@pytest.mark.asyncio
+async def test_run_query_rejects_blank_question_before_embedding() -> None:
+    embeddings = FakeEmbeddings()
+
+    with pytest.raises(ValueError, match="at least two"):
+        await querying.run_query(
+            FakeSession(),
+            question=" ",
+            top_k=5,
+            source=None,
+            settings=SimpleNamespace(retrieval_min_score=0.0),
+            embeddings=embeddings,
+        )
+
+    assert embeddings.question is None

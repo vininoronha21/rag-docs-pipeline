@@ -45,14 +45,17 @@ def ingest_github(
 @cli.command()
 def query(
     question: str,
-    top_k: int = 5,
+    top_k: int = typer.Option(5, min=1, max=12),
     source: Optional[str] = None,  # noqa: UP007 - Typer 0.12 needs typing.Optional.
 ) -> None:
     """Run a semantic search query against the local vector database."""
 
-    answer, query_id, retrieved_chunk_count, latency_ms = asyncio.run(
-        _run_query(question, top_k=top_k, source=source)
-    )
+    try:
+        answer, query_id, retrieved_chunk_count, latency_ms = asyncio.run(
+            _run_query(question, top_k=top_k, source=source)
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     console.print(answer)
     console.print(f"Query {query_id}: {retrieved_chunk_count} chunks in {latency_ms}ms")
 

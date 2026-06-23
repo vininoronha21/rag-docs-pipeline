@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+import typer
 
 from app import cli as cli_module
 from app.services.querying import QueryExecutionResult
@@ -58,3 +59,17 @@ async def test_cli_query_filters_logs_and_returns_result(monkeypatch: pytest.Mon
     assert "FastAPI runs with Uvicorn" in answer
     assert query_id == 7
     assert retrieved_chunk_count == 1
+
+
+def test_cli_query_returns_bad_parameter_for_invalid_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_query(*args: object, **kwargs: object) -> tuple[str, int, int, int]:
+        raise ValueError("Question must contain at least two non-whitespace characters.")
+
+    monkeypatch.setattr(cli_module, "_run_query", fake_run_query)
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        cli_module.query(" ", top_k=5)
+
+    assert "at least two" in str(exc_info.value)

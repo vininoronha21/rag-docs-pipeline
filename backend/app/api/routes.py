@@ -214,6 +214,11 @@ async def query_docs(
         )
     except EmbeddingProviderError as exc:
         raise _embedding_provider_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     return QueryResponse(
         query_id=result.query_id,
         answer=result.answer,

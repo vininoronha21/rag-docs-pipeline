@@ -103,3 +103,24 @@ async def test_query_route_returns_bad_gateway_for_embedding_provider_error(
 
     assert exc_info.value.status_code == status.HTTP_502_BAD_GATEWAY
     assert "Could not reach embedding provider" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_query_route_returns_bad_request_for_query_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_query(*args: object, **kwargs: object) -> None:
+        raise ValueError("top_k must be between 1 and 12.")
+
+    monkeypatch.setattr(routes, "run_query", fake_run_query)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.query_docs(
+            QueryRequest(question="How do I run FastAPI?", top_k=5),
+            session=object(),
+            settings=object(),
+            embeddings=object(),
+        )
+
+    assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == "top_k must be between 1 and 12."
