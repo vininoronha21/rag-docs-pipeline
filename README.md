@@ -1,5 +1,6 @@
 # RAG for Documentation — AI-Ready Data Pipeline
-This repository provides a complete example of a Retrieval-Augmented Generation (RAG) pipeline for documentation. It includes:
+
+A personal, portfolio-oriented RAG pipeline that indexes GitHub Markdown documentation, stores chunks and embeddings in PostgreSQL with pgvector, and answers natural-language questions with cited retrieved context.
 
 ## Current Project Priorities
 
@@ -12,22 +13,15 @@ This repository provides a complete example of a Retrieval-Augmented Generation 
 
 - Current branch: `dev`.
 - Latest local commit observed: `7458b2f fix: share query input validation`.
-- Backend tests now cover the ingestion orchestration path from GitHub Markdown cleanup through chunking, embedding calls, and persistence payloads.
-- Query route tests validate retrieval, relevance filtering, prompt-injection filtering, answer generation, query logging, and response metadata.
-- CLI queries now use the same backend retrieval safeguards as the API and persist query metrics.
-- API and CLI queries now share one backend query service to keep retrieval, filtering, and logging behavior consistent.
-- Repository persistence now validates chunk and embedding counts before database writes and has focused document/chunk upsert tests.
-- Document source management, query history, feedback, and analytics endpoints are implemented.
-- External embedding failures now return clear 502 API responses instead of being confused with GitHub errors.
-- Malformed embedding provider responses are now wrapped as explicit provider errors.
-- Embedding providers now validate configured and returned vector dimensions before persistence.
-- OpenAI embedding responses now reject non-numeric vector payloads before storage.
-- Settings now validate embedding dimensions at startup before providers or pgvector use them.
-- API embedding dependencies now return a clear server configuration error when OpenAI embeddings are enabled without the required key.
-- GitHub ingestion now wraps malformed upstream responses as clear 502 API errors.
-- Query validation is now shared by the API, CLI, and backend query service.
-- Frontend has a functional indexing/chat shell with citations and feedback controls, but visual design remains intentionally simple.
-- Project handoff docs now summarize the current state, requirements, review, and next backend-first priorities.
+- **Pre-Opus Database Confidence sprint completed on 2026-07-03.**
+- Full local RAG loop validated: ingest → persist → retrieve → query → citations → query log.
+- Backend lint (ruff) passes.
+- All 55 backend tests pass under Python 3.12.13 with pinned dependencies.
+- Alembic migrations applied cleanly (3 new migrations applied).
+- 5 documents and 82 chunks ingested from `tiangolo/fastapi`.
+- Query returned an answer with citations and logged 5 chunks in 42ms.
+- Source disable filter confirmed: disabled source returns 0 chunks.
+- Repeatable verification script added: `backend/scripts/verify_pipeline.py`.
 
 ## Stack
 
@@ -55,7 +49,7 @@ The backend container runs Alembic migrations on startup. The default embedding 
 ## Local Backend
 
 ```bash
-python3 -m venv .venv
+PYENV_VERSION=3.12.13 python3 -m venv .venv   # use pyenv if python3.12 is not default
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 docker compose up -d postgres
@@ -161,21 +155,36 @@ Keep `EMBEDDING_DIMENSIONS=1536` unless you also create a matching Alembic migra
 ## Verification
 
 ```bash
-python3 -m pytest backend/tests
-python3 -m ruff check backend
-cd frontend && npm run build
+# Toolchain check
+source .venv/bin/activate
+python -m ruff check backend
+python -m pytest backend/tests
+
+# Full pipeline integration verification
+docker compose up -d postgres
+cd backend
+alembic upgrade head
+PYTHONPATH=. python scripts/verify_pipeline.py
 ```
 
-Latest local verification on 2026-07-03:
+`verify_pipeline.py` validates the complete loop: database connectivity, pgvector, table existence, ingest (5 files from `tiangolo/fastapi`), persistence counts, query with citations, and source disable behavior. All steps use local embeddings — no paid API key required.
 
-- `python3 -m ruff check backend` passed.
-- `python3 -m pytest backend/tests` did not run cleanly in the global Python 3.13 environment because FastAPI 0.111.1 imported incompatible global Starlette 1.3.1. Use a clean Python 3.12 virtualenv and `pip install -r backend/requirements.txt`.
-- `cd frontend && npm run build` failed in the sandbox with a Turbopack port-binding permission error while processing `app/globals.css`; this looks environment/sandbox related and should be retried locally or in CI.
+Latest local verification on 2026-07-03 (Pre-Opus Database Confidence sprint):
+
+- Environment: Python 3.12.13 via pyenv, Docker 29.6.1 with Docker Compose v5.1.4.
+- Database: Docker Compose `pgvector/pgvector:pg15`, Option A.
+- `python -m ruff check backend` → **passed**.
+- `python -m pytest backend/tests` → **55/55 passed** (Python 3.12.13, pinned deps).
+- `alembic upgrade head` → **3 migrations applied** cleanly.
+- Ingest: **5 documents, 82 chunks** from `tiangolo/fastapi`.
+- Query: answer with citations, **5 chunks retrieved in 42ms**, query log persisted.
+- Source disable: **0 chunks returned** when source is disabled.
+- `PYTHONPATH=. python scripts/verify_pipeline.py` → **all 6 checks passed**.
 
 Expected backend environment:
 
 ```bash
-python3.12 -m venv .venv
+PYENV_VERSION=3.12.13 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 python -m pytest backend/tests

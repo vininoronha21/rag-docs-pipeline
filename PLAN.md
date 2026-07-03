@@ -135,56 +135,61 @@ Important current behavior:
 
 ## Verification Status
 
-Latest local check on 2026-07-03:
+Latest local check on 2026-07-03 (Pre-Opus Database Confidence sprint — COMPLETED):
 
-- `python3 -m ruff check backend` passed.
-- `python3 -m pytest backend/tests` failed during collection in the global Python 3.13 environment because FastAPI 0.111.1 loaded incompatible global Starlette 1.3.1.
-- `cd frontend && npm run build` failed in the sandbox with a Turbopack permission error while trying to bind to a port during CSS processing.
+- Environment: Python 3.12.13 via pyenv, Docker 29.6.1, Docker Compose v5.1.4.
+- `python -m ruff check backend` — passed.
+- `python -m pytest backend/tests` — 55/55 passed (Python 3.12.13, pinned deps).
+- `alembic upgrade head` — 3 migrations applied cleanly.
+- Ingest `tiangolo/fastapi` (5 files) — 5 documents, 82 chunks.
+- Query "How do I run FastAPI locally?" — answer + 3 citations, 5 chunks, 42ms, query log persisted.
+- Source disable filter — 0 chunks when disabled.
+- `PYTHONPATH=. python scripts/verify_pipeline.py` — all 6 checks passed.
 
-Expected verification path:
+Note: `python3.12` is not the system default on this machine. Use `PYENV_VERSION=3.12.13 python3 -m venv .venv`.
+
+Verification path:
 
 ```bash
-python3.12 -m venv .venv
+PYENV_VERSION=3.12.13 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 python -m ruff check backend
 python -m pytest backend/tests
-cd frontend
-npm install
-npm run build
+
+# Full pipeline verification
+docker compose up -d postgres
+cd backend
+alembic upgrade head
+PYTHONPATH=. python scripts/verify_pipeline.py
 ```
 
 ## Next Milestone
 
-Validate and document the full local database loop:
+External Provider Hardening (recommended next Opus sprint):
 
-1. Start Postgres/pgvector with Docker Compose.
-2. Run Alembic migrations.
-3. Ingest a small real GitHub repository.
-4. Confirm documents, chunks, sources, and embeddings are persisted.
-5. Query the indexed repository.
-6. Inspect answer quality and citations.
-7. Convert the most important validation into a repeatable integration test or script.
-
-Suggested command path:
-
-```bash
-docker compose up -d postgres
-cd backend
-alembic upgrade head
-python -m app.cli ingest-github https://github.com/tiangolo/fastapi --max-files 5
-python -m app.cli query "How do I run FastAPI locally?" --source github
-```
+1. Add simple retry/backoff for transient GitHub API failures.
+2. Add simple retry/backoff for transient OpenAI embedding failures.
+3. Add connection timeout configuration for external HTTP calls.
+4. Propose unit tests with mocked HTTP clients covering retry behavior.
+5. Review optional embedding batching (only if ingestion runs show it is needed).
 
 ## Roadmap
 
-### Sprint 1: Database Confidence
+### Sprint 1: Database Confidence — COMPLETED (2026-07-03)
 
-- Run the real local Postgres/pgvector validation.
-- Document observed commands, outputs, and any failures.
-- Add a lightweight verification script or integration test for ingest -> persist -> retrieve -> query.
+- Full local Postgres/pgvector validation completed.
+- Observed commands, outputs, and results documented in SPRINT.md and SUMMARY.md.
+- Repeatable verification script added: `backend/scripts/verify_pipeline.py`.
 
-### Sprint 2: Re-Ingestion And Retrieval Quality
+### Sprint 2: External Provider Hardening (Next Opus Sprint)
+
+- Add retry/backoff for transient GitHub and OpenAI embedding failures.
+- Add connection timeout configuration.
+- Add unit tests with mocked HTTP clients.
+- Add embedding batching only if real ingestion runs need it.
+
+### Sprint 3: Re-Ingestion And Retrieval Quality
 
 - Test repeated ingestion of the same repo/path.
 - Confirm document/source identity behavior is acceptable.

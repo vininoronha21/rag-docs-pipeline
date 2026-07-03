@@ -8,20 +8,52 @@ The project is intentionally scoped as a practical MVP, not a large-scale platfo
 
 ## Current Moment
 
-The project is in backend stabilization after the MVP foundation. The current branch is `dev`; latest local commit observed is `7458b2f fix: share query input validation`.
+The project has completed the **Pre-Opus Database Confidence sprint on 2026-07-03**. The full local RAG loop has been validated against a real PostgreSQL/pgvector instance.
+
+Current branch: `dev`. Latest local commit observed: `7458b2f fix: share query input validation`.
 
 Completed:
 
 - Sprint 1 foundation is effectively complete: Docker, Postgres/pgvector, GitHub Markdown ingestion, cleaning, chunking, and tests exist.
 - Sprint 2 MVP backend is mostly complete: embeddings, vector persistence, retrieval, query API, citations, query logging, and feedback are implemented.
 - Sprint 3 has a functional frontend shell, but visual design is intentionally not the priority yet.
+- **Pre-Opus Database Confidence sprint**: full local loop validated, 55/55 tests pass, repeatable verification script added.
 
 Current focus:
 
-- Keep hardening backend behavior.
-- Keep tests passing.
-- Validate real database flows.
-- Avoid spending time on visual polish until backend confidence is higher.
+- Backend database confidence is now validated.
+- Ready for Opus External Provider Hardening Review.
+
+## Sprint Validation Results (2026-07-03)
+
+### Environment
+
+- Python 3.12.13 via pyenv (`PYENV_VERSION=3.12.13`)
+- Docker 29.6.1, Docker Compose v5.1.4
+- Database: Docker Compose `pgvector/pgvector:pg15` (Option A)
+
+### What Passed
+
+| Check | Result |
+|---|---|
+| `python -m ruff check backend` | Passed |
+| `python -m pytest backend/tests` (55 tests, Python 3.12.13) | All passed |
+| `alembic upgrade head` | 3 migrations applied cleanly |
+| Tables: `documents`, `document_chunks`, `doc_sources`, `queries`, `alembic_version` | All exist |
+| Ingest `tiangolo/fastapi` (max 5 files) | 5 docs, 82 chunks |
+| Query: "How do I run FastAPI locally?" | Answer + 3 citations, 5 chunks, 42ms, query_id persisted |
+| Source disable filter | 0 chunks returned when source disabled |
+| `PYTHONPATH=. python scripts/verify_pipeline.py` | All 6 checks passed |
+
+### What Failed Or Was Not Tested
+
+- Frontend build: not retried in this sprint (sandbox restriction from previous audit). Should be retried locally or in CI.
+- No real Turbopack issue is expected outside a restricted sandbox environment.
+
+### Workarounds
+
+- `python3.12` is not the system default; use `PYENV_VERSION=3.12.13 python3 -m venv .venv`.
+- The verification script requires `PYTHONPATH=.` when run from the `backend/` directory.
 
 ## Project Requirements And Constraints
 
@@ -64,6 +96,7 @@ Current focus:
 - Query history endpoint.
 - Document source list and enable/disable endpoints.
 - Analytics summary endpoint.
+- Repeatable verification script: `backend/scripts/verify_pipeline.py`.
 
 ### API Surface
 
@@ -109,40 +142,27 @@ Current data model includes:
 - Answer feedback controls exist.
 - Frontend is intentionally still visually simple.
 
-## Recent Backend Hardening
-
-- API and CLI query behavior now share one backend query workflow.
-- Query validation is shared by the API, CLI, and backend query service.
-- Repository persistence validates chunk and embedding counts before writes.
-- Embedding providers validate configured and returned vector dimensions.
-- OpenAI embedding responses reject malformed, non-numeric, wrong-sized, or wrong-count vectors.
-- Missing OpenAI API key configuration is returned as a clear server configuration error.
-- External embedding failures return clear 502 API responses.
-- GitHub HTTP errors are mapped to clearer API responses.
-- Malformed GitHub upstream responses are wrapped as clear 502 API errors.
-- Settings validate embedding dimensions at startup.
-
 ## Tests And Validation
 
-Expected validation:
-
 ```bash
-python3 -m ruff check backend
-python3 -m pytest backend/tests
-cd frontend && npm run build
+# From project root, with .venv activated
+python -m ruff check backend
+python -m pytest backend/tests
+
+# Full pipeline verification (requires Docker Postgres running)
+cd backend
+PYTHONPATH=. python scripts/verify_pipeline.py
 ```
 
-Latest local validation on 2026-07-03:
+Latest local validation on 2026-07-03 (Pre-Opus sprint):
 
 - Ruff passed.
-- Backend tests failed during collection in the global Python 3.13 environment because FastAPI 0.111.1 imported incompatible global Starlette 1.3.1.
-- Frontend build failed in the sandbox with a Turbopack port-binding permission error while processing `app/globals.css`.
-
-Interpretation:
-
-- The backend test failure appears to be an environment dependency issue, not a direct application-code failure. CI uses Python 3.12 and installs from `backend/requirements.txt`.
-- Re-run backend tests in a clean Python 3.12 virtualenv before treating the current failure as a product regression.
-- Re-run the frontend build outside the restricted sandbox or in CI before treating the Turbopack failure as a frontend regression.
+- All 55 backend tests passed under Python 3.12.13 with pinned dependencies.
+- Alembic migrations applied cleanly (3 new).
+- Ingest: 5 documents, 82 chunks from `tiangolo/fastapi`.
+- Query: answer with citations, 5 chunks retrieved, 42ms latency.
+- Source disable: 0 chunks retrieved when source disabled.
+- `verify_pipeline.py`: all 6 checks passed.
 
 Test coverage currently includes:
 
@@ -183,26 +203,23 @@ Test coverage currently includes:
 
 ## Project Review
 
-The project is in a healthy MVP state. The core backend loop exists: ingest documentation, clean it, chunk it, embed it, persist it, retrieve relevant chunks, answer with citations, log the query, and collect feedback.
+The project is in a healthy, validated MVP state. The core backend loop has been confirmed against a real PostgreSQL/pgvector database: ingest documentation, clean it, chunk it, embed it, persist it, retrieve relevant chunks, answer with citations, log the query, and collect feedback. Source disable filtering is working correctly.
 
-The strongest part of the project right now is the backend foundation and incremental test coverage. Recent work has reduced several failure modes around external providers and inconsistent query handling.
+The strongest part of the project right now is the backend foundation, incremental test coverage, and confirmed real database loop. The verification script provides a repeatable path to re-confirm the full loop.
 
-The main risk is that the system has more unit-level confidence than real end-to-end database confidence. The next technical milestone should be a focused integration validation path against Postgres/pgvector: ingest a real repository, confirm persisted documents/chunks/sources, query it, inspect citations, and assert the behavior in tests where practical.
-
-The project should not move deeply into visual polish or deployment before the real database ingestion/query path is validated again.
+The next technical milestone is External Provider Hardening: retry/backoff for transient GitHub and OpenAI embedding failures, and proposed unit tests with mocks.
 
 ## Current Git/Docs Notes
 
 - Current working branch: `dev`.
 - Latest local commit observed: `7458b2f fix: share query input validation`.
-- `README.md`, `SUMMARY.md`, and `NEXT_STEPS.md` are currently root-level project docs and may be untracked depending on git state.
-- All root `.md` files were untracked in the current local git status when this audit started.
+- `README.md`, `SUMMARY.md`, `NEXT_STEPS.md`, and `SPRINT.md` are root-level project docs.
 - Keep these docs updated as part of each meaningful implementation step.
 
-## Suggested Next Commit For This Documentation Update
+## Suggested Commit For This Update
 
 ```text
-docs: refresh project summary and next steps
+docs: record Pre-Opus Database Confidence sprint results and add verify_pipeline.py
 ```
 
-Short explanation: updates the project handoff docs with the current backend state, constraints, completed work, limitations, and next priorities.
+Short explanation: updates project docs with sprint validation results, Python environment, confirmed DB loop, verification script, and next recommended Opus sprint.
