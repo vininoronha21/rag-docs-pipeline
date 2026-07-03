@@ -25,8 +25,9 @@ The project is past the initial scaffold. It has a working monolithic MVP shape:
 - Typer CLI for ingestion and querying.
 - Next.js frontend shell for repository indexing, chat, citations, and feedback.
 - GitHub Actions CI configured for backend lint/tests and frontend build.
+- Repeatable full-pipeline verification script: `backend/scripts/verify_pipeline.py`.
 
-The next milestone is not a new feature. It is proving the full local database loop against Postgres/pgvector with a real repository and documenting the result.
+The local database loop has already been validated. The next milestone is External Provider Hardening: make GitHub and OpenAI integration failures more resilient without adding unnecessary abstraction.
 
 ## Current Architecture
 
@@ -194,12 +195,6 @@ External Provider Hardening (recommended next Opus sprint):
 - Test repeated ingestion of the same repo/path.
 - Confirm document/source identity behavior is acceptable.
 - Inspect real retrieved chunks and tune chunk size, overlap, or `RETRIEVAL_MIN_SCORE` only if examples justify it.
-
-### Sprint 3: External Provider Hardening
-
-- Add retry/backoff for transient GitHub and OpenAI embedding failures.
-- Add embedding batching only if real ingestion runs need it.
-- Keep provider configuration errors explicit.
 
 ### Sprint 4: Optional LLM Provider
 

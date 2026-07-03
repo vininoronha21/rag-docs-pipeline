@@ -12,7 +12,7 @@ A personal, portfolio-oriented RAG pipeline that indexes GitHub Markdown documen
 ## Current Progress
 
 - Current branch: `dev`.
-- Latest local commit observed: `7458b2f fix: share query input validation`.
+- Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
 - **Pre-Opus Database Confidence sprint completed on 2026-07-03.**
 - Full local RAG loop validated: ingest → persist → retrieve → query → citations → query log.
 - Backend lint (ruff) passes.

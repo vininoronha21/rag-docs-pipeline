@@ -30,21 +30,19 @@ Current project state:
 
 - Backend MVP is mostly implemented: GitHub Markdown ingestion, cleanup, chunking, local/OpenAI embeddings, pgvector persistence, retrieval, extractive answers with citations, query logging, feedback, history, source management, and analytics.
 - Frontend exists as a simple functional Next.js shell for indexing, chat, citations, and feedback.
-- Current focus is backend stabilization and real local Postgres/pgvector validation.
-- Latest local audit found environment-specific verification issues: ruff passed, pytest failed in global Python 3.13 because of incompatible global Starlette, and frontend build failed in a restricted sandbox with a Turbopack port-binding error. Re-test in a clean Python 3.12 virtualenv and normal local/CI frontend environment before treating those as product regressions.
+- The Pre-Opus Database Confidence sprint was completed on 2026-07-03.
+- The full local backend loop has been validated against Docker PostgreSQL/pgvector: ingest, persist, retrieve, query, citations, query log, and source disable filtering.
+- Backend verification passed under Python 3.12.13: ruff passed, 55/55 tests passed, Alembic migrations applied cleanly, and `backend/scripts/verify_pipeline.py` passed all checks.
+- Frontend build was not retried after the earlier restricted-sandbox Turbopack port-binding failure. Re-test locally or in CI before treating it as a frontend regression.
 
 Your first task:
 
 1. Check git status.
-2. Use a clean Python 3.12 environment if running backend tests.
+2. Read `NEXT_STEPS.md` and confirm the next sprint scope.
 3. Continue from NEXT_STEPS.md.
-4. Prioritize validating the real local database loop:
-   - docker compose up -d postgres
-   - alembic upgrade head
-   - ingest a small real GitHub repo
-   - query it
-   - inspect persisted documents/chunks/sources/citations
-   - document the result
+4. Prioritize the next Opus sprint: External Provider Hardening Review.
+5. Review GitHub and OpenAI integration behavior, propose simple retry/backoff and timeout improvements, and recommend unit tests with mocks.
+6. Do not spend time validating Docker, local PostgreSQL, pgvector runtime behavior, frontend redesign, auth, deployment, or external LLM synthesis.
 
 If you understand the project and constraints, briefly summarize the current state and propose the next concrete action before editing files.
 ```
@@ -58,6 +56,7 @@ Attach these `.md` files to give Opus a complete understanding of the project, r
 3. `README.md`
 4. `PLAN.md`
 5. `AGENTS.md`
+6. `SPRINT.md`
 
 ## Optional Markdown Attachment
 

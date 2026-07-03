@@ -10,7 +10,7 @@ The project is intentionally scoped as a practical MVP, not a large-scale platfo
 
 The project has completed the **Pre-Opus Database Confidence sprint on 2026-07-03**. The full local RAG loop has been validated against a real PostgreSQL/pgvector instance.
 
-Current branch: `dev`. Latest local commit observed: `7458b2f fix: share query input validation`.
+Current branch: `dev`. Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
 
 Completed:
 
@@ -212,7 +212,7 @@ The next technical milestone is External Provider Hardening: retry/backoff for t
 ## Current Git/Docs Notes
 
 - Current working branch: `dev`.
-- Latest local commit observed: `7458b2f fix: share query input validation`.
+- Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
 - `README.md`, `SUMMARY.md`, `NEXT_STEPS.md`, and `SPRINT.md` are root-level project docs.
 - Keep these docs updated as part of each meaningful implementation step.
 
