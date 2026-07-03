@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -5,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.config import Settings
+from app.services.http_retry import request_with_retry
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,12 @@ class GithubClientError(RuntimeError):
 
 
 class GithubClient:
+    # Class-level defaults keep retry config safe when instances are built via
+    # ``__new__`` in tests. ``__init__`` overrides them from settings.
+    _max_retries: int = 0
+    _backoff_seconds: float = 0.0
+    _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
+
     def __init__(self, settings: Settings) -> None:
         headers = {
             "Accept": "application/vnd.github+json",
@@ -41,7 +50,17 @@ class GithubClient:
             base_url="https://api.github.com",
             headers=headers,
             follow_redirects=True,
-            timeout=30,
+            timeout=settings.http_timeout_seconds,
+        )
+        self._max_retries = settings.http_max_retries
+        self._backoff_seconds = settings.http_retry_backoff_seconds
+
+    async def _get(self, *args: Any, **kwargs: Any) -> httpx.Response:
+        return await request_with_retry(
+            lambda: self._client.get(*args, **kwargs),
+            max_retries=self._max_retries,
+            backoff_seconds=self._backoff_seconds,
+            sleep=self._sleep,
         )
 
     async def close(self) -> None:
@@ -49,7 +68,7 @@ class GithubClient:
 
     async def get_repo(self, repo_url: str) -> GithubRepo:
         owner, name = parse_repo_url(repo_url)
-        response = await self._client.get(f"/repos/{owner}/{name}")
+        response = await self._get(f"/repos/{owner}/{name}")
         response.raise_for_status()
         payload = _response_json(
             response,
@@ -102,7 +121,7 @@ class GithubClient:
                     "GitHub returned an invalid file response. Try again later."
                 )
 
-            raw = await self._client.get(entry_download_url)
+            raw = await self._get(entry_download_url)
             raw.raise_for_status()
             files.append(
                 GithubFile(
@@ -124,7 +143,7 @@ class GithubClient:
         *,
         max_files: int,
     ) -> list[dict[str, Any]]:
-        response = await self._client.get(
+        response = await self._get(
             f"/repos/{owner}/{repo}/contents/{path}",
             params={"ref": ref},
         )

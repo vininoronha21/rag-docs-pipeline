@@ -202,3 +202,44 @@ postgresql+asyncpg://rag:rag@localhost:5432/rag_docs
 2. Enable the pgvector extension if required by the provider.
 3. Set `DATABASE_URL` to the provider connection string.
 4. Run Alembic migrations.
+
+---
+
+# Opus Sprint: External Provider Hardening
+
+## Status: COMPLETED — 2026-07-03
+
+## Objective
+
+Make GitHub and OpenAI embedding integrations resilient to transient failures without adding unnecessary abstraction.
+
+## What Shipped
+
+- **Shared retry helper**: `backend/app/services/http_retry.py` — `request_with_retry(send, *, max_retries, backoff_seconds, sleep)`. Retries transient HTTP status codes (429, 500, 502, 503, 504) and `httpx.RequestError` (connect/timeout/network) with exponential backoff (`backoff * 2**attempt`). Non-transient responses are returned unchanged for the caller to handle via `raise_for_status`. Injectable `sleep` keeps tests instant.
+- **GitHub client** (`github.py`): all requests routed through a new `_get` wrapper using the helper; timeout now sourced from `HTTP_TIMEOUT_SECONDS`. Class-level retry defaults keep `__new__`-based test construction safe.
+- **OpenAI embeddings** (`embeddings.py`): request wrapped in the helper; constructor gains `timeout_seconds`, `max_retries`, `backoff_seconds`, `sleep` (backward-compatible defaults). `build_embedding_provider` wires settings through.
+- **Settings** (`config.py`): `HTTP_TIMEOUT_SECONDS` (30.0), `HTTP_MAX_RETRIES` (2), `HTTP_RETRY_BACKOFF_SECONDS` (0.5), all validated.
+
+## Tests Added (14)
+
+- `test_http_retry.py` (7): status classification, immediate success, transient-status retry, exhaustion returns last response, network-error retry, network-error exhaustion raises, zero-retry passthrough.
+- `test_github.py` (+2): transient status retried then succeeds; raises after retries exhausted.
+- `test_embeddings.py` (+2): transient status retried then succeeds; network error retried then wrapped error.
+- `test_config.py` (+3): hardening defaults; reject negative retries; reject non-positive timeout.
+
+## Verification (2026-07-03)
+
+- `ruff check backend` → **passed**.
+- Affected files `test_http_retry.py test_embeddings.py test_github.py test_config.py` → **27 passed** (13 pre-existing + 14 new).
+- Full 55+-test suite **not run in this environment**: only Python 3.14 available (no C compiler), so pinned `asyncpg`/`sqlalchemy` could not build. Changed code imports only `httpx`/`pydantic`, so affected-file coverage is the meaningful surface. Re-run full suite in the project's 3.12.13 venv or CI to confirm no regressions.
+
+## Decisions
+
+- Embedding batching intentionally deferred (no evidence yet it is needed).
+- No provider abstraction layer added — a single small helper covers both integrations.
+
+## Next Sprint
+
+```text
+Re-Ingestion And Retrieval Quality Review
+```

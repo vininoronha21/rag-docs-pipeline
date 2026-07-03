@@ -1,11 +1,14 @@
+import asyncio
 import hashlib
 import math
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 
 import httpx
 
 from app.core.config import Settings
+from app.services.http_retry import request_with_retry
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_À-ÿ]+")
 
@@ -50,19 +53,42 @@ class LocalHashEmbeddingProvider(EmbeddingProvider):
 
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
-    def __init__(self, api_key: str, model: str, dimensions: int) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        dimensions: int,
+        *,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 0,
+        backoff_seconds: float = 0.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         _validate_dimensions(dimensions)
         self.api_key = api_key
         self.model = model
         self.dimensions = dimensions
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.backoff_seconds = backoff_seconds
+        self._sleep = sleep
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/embeddings",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={"model": self.model, "input": texts, "dimensions": self.dimensions},
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await request_with_retry(
+                    lambda: client.post(
+                        "https://api.openai.com/v1/embeddings",
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json={
+                            "model": self.model,
+                            "input": texts,
+                            "dimensions": self.dimensions,
+                        },
+                    ),
+                    max_retries=self.max_retries,
+                    backoff_seconds=self.backoff_seconds,
+                    sleep=self._sleep,
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -123,5 +149,8 @@ def build_embedding_provider(settings: Settings) -> EmbeddingProvider:
             api_key=settings.openai_api_key,
             model=settings.openai_embedding_model,
             dimensions=settings.embedding_dimensions,
+            timeout_seconds=settings.http_timeout_seconds,
+            max_retries=settings.http_max_retries,
+            backoff_seconds=settings.http_retry_backoff_seconds,
         )
     return LocalHashEmbeddingProvider(dimensions=settings.embedding_dimensions)

@@ -35,41 +35,35 @@ What was not tested in this sprint:
 
 - Frontend build (not retried; previous sandbox failure appears environment-specific, not a regression)
 
+## Completed: External Provider Hardening Sprint (2026-07-03)
+
+Done. GitHub and OpenAI embedding calls are now resilient to transient failures.
+
+What shipped:
+
+- Shared `request_with_retry` helper in `app/services/http_retry.py` (exponential backoff; retries transient 429/5xx and `httpx.RequestError`).
+- `GithubClient` routes all requests through the helper and uses `HTTP_TIMEOUT_SECONDS`.
+- `OpenAIEmbeddingProvider` wraps its request in the helper and uses the configurable timeout.
+- New settings: `HTTP_TIMEOUT_SECONDS` (default 30.0), `HTTP_MAX_RETRIES` (default 2), `HTTP_RETRY_BACKOFF_SECONDS` (default 0.5).
+- 14 new mocked-HTTP unit tests (retry helper, GitHub retry, OpenAI embedding retry, config validation).
+
+Verification note:
+
+- Ruff passed on `backend`.
+- The 4 affected test files (27 tests, incl. 14 new) passed. The full 55+-test suite requires the project's Python 3.12.13 venv; this machine currently only has Python 3.14 without a C compiler, so `asyncpg`/`sqlalchemy` could not be installed here. Re-run the full suite in the 3.12.13 venv or CI to confirm no regressions.
+- Embedding batching was intentionally NOT added (defer until real ingestion runs justify it).
+
 ## Immediate Priority
 
-The database loop is validated. The next sprint for Opus is:
+External provider hardening is done. The next sprint is:
 
 ```text
-External Provider Hardening Review
+Re-Ingestion And Retrieval Quality Review
 ```
-
-Opus should review GitHub and OpenAI integration behavior, propose simple retry/backoff and timeout improvements, and recommend unit tests with mocks. Opus should NOT be asked to validate local DB execution, run Docker, or work on frontend redesign, auth, deployment, or external LLM synthesis.
 
 ## Current Recommended Order
 
-### 1. External Provider Hardening (Next Opus Sprint)
-
-Current state:
-
-- GitHub HTTP errors and malformed upstream responses already return clear API responses.
-- OpenAI embedding failures return 502 and wrap clearly.
-- Missing OpenAI API key returns a clear server configuration error.
-
-Still needed:
-
-- Simple retry/backoff for transient GitHub and OpenAI embedding failures.
-- Connection timeout configuration for external HTTP calls.
-- Unit tests with mocked HTTP clients covering retry behavior.
-- Optional embedding batching only if real ingestion runs show it is needed.
-
-Acceptance criteria:
-
-- Transient external failures are less likely to hard-fail ingestion or queries.
-- Retry/backoff is simple and testable.
-- Configuration errors remain clear.
-- No complex provider abstraction is added before needed.
-
-### 2. Re-Ingestion And Retrieval Quality Review
+### 1. Re-Ingestion And Retrieval Quality Review
 
 Current state:
 
@@ -91,7 +85,7 @@ Acceptance criteria:
 - Re-ingesting the same source behaves predictably (no duplicate docs/chunks).
 - Retrieval quality is understood for at least one real documentation repo.
 
-### 3. Optional LLM Answer Provider
+### 2. Optional LLM Answer Provider
 
 Current state:
 
@@ -111,7 +105,7 @@ Acceptance criteria:
 - Prompt construction is tested.
 - Answer still returns citations.
 
-### 4. Frontend Functionality Before Design
+### 3. Frontend Functionality Before Design
 
 Do only if backend validation is stable:
 
@@ -128,7 +122,7 @@ Do later in design sprint:
 - Motion/animation work.
 - Detailed layout polish.
 
-### 5. Deployment Preparation
+### 4. Deployment Preparation
 
 Do after backend validation:
 
@@ -157,8 +151,8 @@ PYTHONPATH=. python scripts/verify_pipeline.py
 
 ### Backend
 
-- Retry/backoff for GitHub and embedding providers.
-- Connection timeout configuration.
+- Retry/backoff for GitHub and embedding providers. (done 2026-07-03)
+- Connection timeout configuration. (done 2026-07-03)
 - Optional embedding batching.
 - Optional LLM answer provider.
 - Stronger prompt-injection protections.

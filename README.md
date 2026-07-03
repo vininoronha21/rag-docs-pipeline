@@ -14,6 +14,7 @@ A personal, portfolio-oriented RAG pipeline that indexes GitHub Markdown documen
 - Current branch: `dev`.
 - Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
 - **Pre-Opus Database Confidence sprint completed on 2026-07-03.**
+- **External Provider Hardening sprint completed on 2026-07-03.** Retry/backoff and configurable timeouts added for GitHub and OpenAI embedding calls, with mocked-HTTP unit tests.
 - Full local RAG loop validated: ingest → persist → retrieve → query → citations → query log.
 - Backend lint (ruff) passes.
 - All 55 backend tests pass under Python 3.12.13 with pinned dependencies.
@@ -141,6 +142,16 @@ RETRIEVAL_MIN_SCORE=0.0
 ```
 
 `RETRIEVAL_MIN_SCORE` filters weak vector matches before answer generation. Increase it when the app should prefer saying no indexed documentation matched over answering from low-similarity chunks.
+
+External HTTP hardening (GitHub and OpenAI calls):
+
+```bash
+HTTP_TIMEOUT_SECONDS=30.0        # connection/read timeout for external HTTP calls
+HTTP_MAX_RETRIES=2               # retry attempts for transient 429/5xx/network failures
+HTTP_RETRY_BACKOFF_SECONDS=0.5   # base seconds for exponential backoff between retries
+```
+
+Transient GitHub and OpenAI embedding failures (429, 500, 502, 503, 504, and network errors) are retried with exponential backoff. Set `HTTP_MAX_RETRIES=0` to disable retries.
 
 OpenAI embeddings:
 

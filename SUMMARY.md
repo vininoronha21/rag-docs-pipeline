@@ -8,7 +8,7 @@ The project is intentionally scoped as a practical MVP, not a large-scale platfo
 
 ## Current Moment
 
-The project has completed the **Pre-Opus Database Confidence sprint on 2026-07-03**. The full local RAG loop has been validated against a real PostgreSQL/pgvector instance.
+The project has completed the **Pre-Opus Database Confidence sprint** and the **External Provider Hardening sprint**, both on 2026-07-03. The full local RAG loop has been validated against a real PostgreSQL/pgvector instance, and external GitHub/OpenAI calls now have configurable timeouts plus retry/backoff on transient failures.
 
 Current branch: `dev`. Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
 
@@ -18,11 +18,12 @@ Completed:
 - Sprint 2 MVP backend is mostly complete: embeddings, vector persistence, retrieval, query API, citations, query logging, and feedback are implemented.
 - Sprint 3 has a functional frontend shell, but visual design is intentionally not the priority yet.
 - **Pre-Opus Database Confidence sprint**: full local loop validated, 55/55 tests pass, repeatable verification script added.
+- **External Provider Hardening sprint**: shared `request_with_retry` helper added; GitHub client and OpenAI embedding provider now use configurable timeout and retry/backoff on transient 429/5xx/network failures; 14 new mocked-HTTP unit tests added.
 
 Current focus:
 
-- Backend database confidence is now validated.
-- Ready for Opus External Provider Hardening Review.
+- Backend database confidence and external provider resilience are now validated.
+- Next: Re-Ingestion and Retrieval Quality Review.
 
 ## Sprint Validation Results (2026-07-03)
 
@@ -84,6 +85,8 @@ Current focus:
 - Local deterministic hash embeddings for zero-cost development.
 - Optional OpenAI embeddings through environment configuration.
 - Embedding provider validation for dimensions, malformed payloads, non-numeric vectors, count mismatches, upstream errors, and missing API key configuration.
+- Shared `request_with_retry` helper (`app/services/http_retry.py`) with exponential backoff for transient GitHub and OpenAI failures.
+- Configurable external HTTP timeout and retry settings: `HTTP_TIMEOUT_SECONDS`, `HTTP_MAX_RETRIES`, `HTTP_RETRY_BACKOFF_SECONDS`.
 - pgvector retrieval with source filtering.
 - Disabled linked document sources are excluded from retrieval.
 - Shared query workflow used by API and CLI.
@@ -190,7 +193,7 @@ Test coverage currently includes:
 - Answer generation is still extractive, not LLM-generated.
 - The configured OpenAI chat model is not used yet because an LLM answer provider has not been implemented.
 - Local hash embeddings are useful for free local development but are not semantically strong.
-- OpenAI embeddings are available, but production-grade provider retry/backoff and batching still need work.
+- OpenAI embeddings now have retry/backoff and configurable timeout; batching is still not implemented (add only if real ingestion runs show it is needed).
 - There is no real LLM answer provider behind the extractive fallback yet.
 - Prompt-injection filtering is basic and heuristic.
 - Retrieval quality still needs real repository evaluation.

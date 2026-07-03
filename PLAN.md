@@ -27,7 +27,7 @@ The project is past the initial scaffold. It has a working monolithic MVP shape:
 - GitHub Actions CI configured for backend lint/tests and frontend build.
 - Repeatable full-pipeline verification script: `backend/scripts/verify_pipeline.py`.
 
-The local database loop has already been validated. The next milestone is External Provider Hardening: make GitHub and OpenAI integration failures more resilient without adding unnecessary abstraction.
+The local database loop has been validated, and External Provider Hardening is complete: GitHub and OpenAI calls now have configurable timeouts and retry/backoff on transient failures. The next milestone is Re-Ingestion and Retrieval Quality Review.
 
 ## Current Architecture
 
@@ -124,7 +124,7 @@ Important current behavior:
 - Answer generation is extractive, not true LLM synthesis.
 - `LLM_PROVIDER=openai` exists in config but there is no implemented OpenAI chat answer provider yet.
 - Local hash embeddings are deterministic and free but weaker than semantic embeddings.
-- OpenAI embedding calls do not yet have production-grade retry/backoff or batching.
+- OpenAI embedding calls now have retry/backoff and configurable timeout; batching is not yet implemented.
 - Prompt-injection filtering is basic and heuristic.
 - Retrieval quality needs real repository evaluation.
 - No reranking.
@@ -167,13 +167,12 @@ PYTHONPATH=. python scripts/verify_pipeline.py
 
 ## Next Milestone
 
-External Provider Hardening (recommended next Opus sprint):
+Re-Ingestion and Retrieval Quality Review:
 
-1. Add simple retry/backoff for transient GitHub API failures.
-2. Add simple retry/backoff for transient OpenAI embedding failures.
-3. Add connection timeout configuration for external HTTP calls.
-4. Propose unit tests with mocked HTTP clients covering retry behavior.
-5. Review optional embedding batching (only if ingestion runs show it is needed).
+1. Confirm repeated ingestion of the same repo/path behaves predictably (no duplicate docs/chunks).
+2. Add tests around repeated ingestion.
+3. Review `RETRIEVAL_MIN_SCORE` behavior with local and semantic embeddings.
+4. Inspect real retrieved chunk text quality; tune chunk size/overlap only if examples justify it.
 
 ## Roadmap
 
@@ -183,12 +182,12 @@ External Provider Hardening (recommended next Opus sprint):
 - Observed commands, outputs, and results documented in SPRINT.md and SUMMARY.md.
 - Repeatable verification script added: `backend/scripts/verify_pipeline.py`.
 
-### Sprint 2: External Provider Hardening (Next Opus Sprint)
+### Sprint 2: External Provider Hardening — COMPLETED (2026-07-03)
 
-- Add retry/backoff for transient GitHub and OpenAI embedding failures.
-- Add connection timeout configuration.
-- Add unit tests with mocked HTTP clients.
-- Add embedding batching only if real ingestion runs need it.
+- Added retry/backoff for transient GitHub and OpenAI embedding failures via shared `request_with_retry` helper.
+- Added connection timeout configuration (`HTTP_TIMEOUT_SECONDS`).
+- Added 14 unit tests with mocked HTTP clients.
+- Embedding batching deferred until real ingestion runs justify it.
 
 ### Sprint 3: Re-Ingestion And Retrieval Quality
 

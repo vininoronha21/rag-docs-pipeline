@@ -24,6 +24,22 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_user_agent: str = "rag-docs-pipeline"
 
+    http_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="Connection/read timeout for external HTTP calls (GitHub, OpenAI).",
+    )
+    http_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retry attempts for transient external HTTP failures (429/5xx/network).",
+    )
+    http_retry_backoff_seconds: float = Field(
+        default=0.5,
+        ge=0,
+        description="Base seconds for exponential backoff between HTTP retries.",
+    )
+
     embedding_provider: Literal["local", "openai"] = "local"
     embedding_dimensions: int = Field(
         default=1536,
