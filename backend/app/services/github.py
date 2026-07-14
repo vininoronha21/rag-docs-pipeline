@@ -1,8 +1,10 @@
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -92,35 +94,66 @@ class GithubClient:
             default_branch=default_branch,
         )
 
+    async def resolve_commit(self, repo: GithubRepo, *, branch: str) -> str:
+        response = await self._get(
+            f"/repos/{repo.owner}/{repo.name}/commits/{quote(branch, safe='')}"
+        )
+        response.raise_for_status()
+        payload = _response_json(
+            response,
+            error_message="GitHub returned an invalid commit response. Try again later.",
+        )
+        try:
+            commit_sha = payload["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GithubClientError(
+                "GitHub returned an invalid commit response. Try again later."
+            ) from exc
+        if not isinstance(commit_sha, str) or re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            raise GithubClientError("GitHub returned an invalid commit response. Try again later.")
+        return commit_sha
+
     async def fetch_markdown_files(
         self,
         repo: GithubRepo,
         *,
-        branch: str | None = None,
-        path: str = "",
-        max_files: int = 50,
+        commit_sha: str,
+        path: str,
+        max_files: int,
     ) -> list[GithubFile]:
-        ref = branch or repo.default_branch
-        entries = await self._walk_contents(repo.owner, repo.name, path, ref, max_files=max_files)
+        normalized_path = normalize_repository_path(path)
+        if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            raise ValueError("commit_sha must be a 40-character lowercase hexadecimal SHA")
+        entries = await self._walk_contents(
+            repo.owner,
+            repo.name,
+            normalized_path,
+            commit_sha,
+            max_files=max_files,
+        )
         files: list[GithubFile] = []
-        for entry in entries[:max_files]:
+        for entry in entries:
             try:
                 entry_path = entry["path"]
                 entry_sha = entry["sha"]
-                entry_html_url = entry["html_url"]
-                entry_download_url = entry["download_url"]
             except (KeyError, TypeError) as exc:
                 raise GithubClientError(
                     "GitHub returned an invalid file response. Try again later."
                 ) from exc
-            if not all(
-                isinstance(value, str)
-                for value in (entry_path, entry_sha, entry_html_url, entry_download_url)
-            ):
+            if not isinstance(entry_path, str) or not isinstance(entry_sha, str):
                 raise GithubClientError(
                     "GitHub returned an invalid file response. Try again later."
                 )
 
+            encoded_path = quote(entry_path, safe="/")
+            entry_html_url = (
+                f"https://github.com/{quote(repo.owner, safe='')}/"
+                f"{quote(repo.name, safe='')}/blob/{commit_sha}/{encoded_path}"
+            )
+            entry_download_url = (
+                f"https://raw.githubusercontent.com/{quote(repo.owner, safe='')}/"
+                f"{quote(repo.name, safe='')}/{commit_sha}/{encoded_path}"
+            )
             raw = await self._get(entry_download_url)
             raw.raise_for_status()
             files.append(
@@ -143,52 +176,61 @@ class GithubClient:
         *,
         max_files: int,
     ) -> list[dict[str, Any]]:
-        response = await self._get(
-            f"/repos/{owner}/{repo}/contents/{path}",
-            params={"ref": ref},
-        )
-        response.raise_for_status()
-        payload = _response_json(
-            response,
-            error_message="GitHub returned an invalid contents response. Try again later.",
-        )
-        if isinstance(payload, list):
-            items = payload
-        elif isinstance(payload, dict):
-            items = [payload]
-        else:
-            raise GithubClientError(
-                "GitHub returned an invalid contents response. Try again later."
-            )
         markdown_files: list[dict[str, Any]] = []
 
-        for item in items:
-            if len(markdown_files) >= max_files:
-                break
-            try:
-                item_type = item["type"]
-                item_path = item["path"]
-            except (KeyError, TypeError) as exc:
-                raise GithubClientError(
-                    "GitHub returned an invalid contents response. Try again later."
-                ) from exc
-            if not isinstance(item_type, str) or not isinstance(item_path, str):
+        async def walk(current_path: str) -> None:
+            response = await self._get(
+                f"/repos/{owner}/{repo}/contents/{quote(current_path, safe='/')}",
+                params={"ref": ref},
+            )
+            response.raise_for_status()
+            payload = _response_json(
+                response,
+                error_message="GitHub returned an invalid contents response. Try again later.",
+            )
+            if isinstance(payload, list):
+                items = payload
+            elif isinstance(payload, dict):
+                items = [payload]
+            else:
                 raise GithubClientError(
                     "GitHub returned an invalid contents response. Try again later."
                 )
 
-            if item_type == "file" and _is_markdown_file(item):
-                markdown_files.append(item)
-            elif item_type == "dir" and _is_documentation_path(item_path):
-                markdown_files.extend(
-                    await self._walk_contents(
-                        owner,
-                        repo,
-                        item_path,
-                        ref,
-                        max_files=max_files - len(markdown_files),
+            for item in items:
+                try:
+                    item_type = item["type"]
+                    item_path = item["path"]
+                except (KeyError, TypeError) as exc:
+                    raise GithubClientError(
+                        "GitHub returned an invalid contents response. Try again later."
+                    ) from exc
+                if not isinstance(item_type, str) or not isinstance(item_path, str):
+                    raise GithubClientError(
+                        "GitHub returned an invalid contents response. Try again later."
                     )
-                )
+                try:
+                    normalized_item_path = normalize_repository_path(item_path)
+                except ValueError as exc:
+                    raise GithubClientError(
+                        "GitHub returned an invalid contents response. Try again later."
+                    ) from exc
+                if PurePosixPath(normalized_item_path).parent != PurePosixPath(current_path):
+                    raise GithubClientError(
+                        "GitHub returned an invalid contents response. Try again later."
+                    )
+
+                if item_type == "file" and _is_markdown_file(item):
+                    markdown_files.append(item)
+                    if len(markdown_files) > max_files:
+                        raise GithubClientError(
+                            "GitHub Markdown file count exceeds the maximum of "
+                            f"{max_files} files."
+                        )
+                elif item_type == "dir":
+                    await walk(item_path)
+
+        await walk(path)
 
         return markdown_files
 
@@ -199,6 +241,17 @@ def parse_repo_url(repo_url: str) -> tuple[str, str]:
     if parsed.netloc.lower() != "github.com" or len(parts) < 2:
         raise ValueError("Expected a GitHub repository URL like https://github.com/owner/repo")
     return parts[0], parts[1].removesuffix(".git")
+
+
+def normalize_repository_path(path: str) -> str:
+    if not path or "\\" in path:
+        raise ValueError("Repository path must be a non-empty POSIX relative path")
+    if any(part in {".", ".."} for part in path.split("/")):
+        raise ValueError("Repository path cannot contain '.' or '..' segments")
+    normalized = PurePosixPath(path)
+    if normalized.is_absolute() or str(normalized) in {"", "."}:
+        raise ValueError("Repository path must be a non-empty POSIX relative path")
+    return str(normalized)
 
 
 def _response_json(response: httpx.Response, *, error_message: str) -> Any:
@@ -216,14 +269,5 @@ def _is_markdown_file(item: dict[str, Any]) -> bool:
             "GitHub returned an invalid contents response. Try again later."
         ) from exc
     if not isinstance(name, str):
-        raise GithubClientError(
-            "GitHub returned an invalid contents response. Try again later."
-        )
+        raise GithubClientError("GitHub returned an invalid contents response. Try again later.")
     return name.lower().endswith((".md", ".mdx"))
-
-
-def _is_documentation_path(path: str) -> bool:
-    lowered = path.lower()
-    if lowered in {"docs", "documentation", ".github"}:
-        return True
-    return any(segment in {"docs", "documentation", "guides"} for segment in lowered.split("/"))
