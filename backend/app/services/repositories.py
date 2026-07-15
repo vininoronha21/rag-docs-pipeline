@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
@@ -273,8 +274,22 @@ async def retrieve_chunks(
     source: str | None = None,
     source_id: int | None = None,
 ) -> list[RetrievedChunk]:
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
     if candidate_k <= top_k:
         raise ValueError("candidate_k must be greater than top_k")
+    if rrf_k <= 0:
+        raise ValueError("rrf_k must be greater than 0")
+    for name, weight in (
+        ("vector_weight", vector_weight),
+        ("text_weight", text_weight),
+    ):
+        if not isfinite(weight) or weight <= 0:
+            raise ValueError(f"{name} must be finite and greater than 0")
+    if not embedding:
+        raise ValueError("embedding must not be empty")
+    if any(not isfinite(value) for value in embedding):
+        raise ValueError("embedding values must be finite")
     embedding_literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
     source_clause = "AND d.source = :source" if source else ""
     source_id_clause = "AND ds.id = :source_id" if source_id is not None else ""

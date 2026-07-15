@@ -19,6 +19,18 @@ class FakeSession:
         return FakeResult()
 
 
+def retrieval_kwargs() -> dict[str, object]:
+    return {
+        "question": "como executar",
+        "embedding": [0.1, 0.2],
+        "top_k": 5,
+        "candidate_k": 20,
+        "rrf_k": 60,
+        "vector_weight": 0.7,
+        "text_weight": 0.3,
+    }
+
+
 @pytest.mark.asyncio
 async def test_retrieve_chunks_requires_enabled_active_source_version() -> None:
     session = FakeSession()
@@ -101,3 +113,55 @@ async def test_retrieve_chunks_requires_more_candidates_than_results() -> None:
             vector_weight=0.7,
             text_weight=0.3,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("top_k", [0, -1])
+async def test_retrieve_chunks_requires_positive_top_k(top_k: int) -> None:
+    kwargs = retrieval_kwargs()
+    kwargs["top_k"] = top_k
+
+    with pytest.raises(ValueError, match="top_k must be at least 1"):
+        await retrieve_chunks(FakeSession(), **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rrf_k", [0, -1])
+async def test_retrieve_chunks_requires_positive_rrf_k(rrf_k: int) -> None:
+    kwargs = retrieval_kwargs()
+    kwargs["rrf_k"] = rrf_k
+
+    with pytest.raises(ValueError, match="rrf_k must be greater than 0"):
+        await retrieve_chunks(FakeSession(), **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["vector_weight", "text_weight"])
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+async def test_retrieve_chunks_requires_positive_finite_weights(
+    field: str, value: float
+) -> None:
+    kwargs = retrieval_kwargs()
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=rf"{field} must be finite and greater than 0"):
+        await retrieve_chunks(FakeSession(), **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_chunks_requires_non_empty_embedding() -> None:
+    kwargs = retrieval_kwargs()
+    kwargs["embedding"] = []
+
+    with pytest.raises(ValueError, match="embedding must not be empty"):
+        await retrieve_chunks(FakeSession(), **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+async def test_retrieve_chunks_requires_finite_embedding_values(value: float) -> None:
+    kwargs = retrieval_kwargs()
+    kwargs["embedding"] = [0.1, value]
+
+    with pytest.raises(ValueError, match="embedding values must be finite"):
+        await retrieve_chunks(FakeSession(), **kwargs)

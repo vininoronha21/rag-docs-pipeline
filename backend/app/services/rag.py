@@ -24,7 +24,9 @@ def filter_chunks_by_min_score(
     return [
         chunk
         for chunk in chunks
-        if chunk.vector_score is None or chunk.vector_score >= min_score
+        if chunk.text_score is not None
+        or chunk.vector_score is None
+        or chunk.vector_score >= min_score
     ]
 
 

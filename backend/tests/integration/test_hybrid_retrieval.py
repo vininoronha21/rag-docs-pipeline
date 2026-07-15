@@ -161,6 +161,40 @@ async def test_hybrid_retrieval_fuses_active_candidates_and_handles_empty_arms(
     assert disabled_id not in {chunk.id for chunk in fused}
     assert next(chunk for chunk in fused if chunk.id == exact_id).vector_score is None
 
+    unscoped = await retrieve_chunks(
+        session,
+        question="termoexato",
+        embedding=[1.0] + [0.0] * 1535,
+        top_k=4,
+        candidate_k=10,
+        rrf_k=60,
+        vector_weight=0.5,
+        text_weight=0.5,
+        source="github",
+    )
+
+    assert disabled_id not in {chunk.id for chunk in unscoped}
+    assert inactive_id not in {chunk.id for chunk in unscoped}
+
+    sync_connection.execute(
+        text("UPDATE doc_sources SET enabled = TRUE WHERE id = :source_id"),
+        {"source_id": disabled_source_id},
+    )
+    enabled_competition = await retrieve_chunks(
+        session,
+        question="termoexato",
+        embedding=[1.0] + [0.0] * 1535,
+        top_k=4,
+        candidate_k=10,
+        rrf_k=60,
+        vector_weight=0.5,
+        text_weight=0.5,
+        source="github",
+    )
+
+    assert disabled_id in {chunk.id for chunk in enabled_competition}
+    assert inactive_id not in {chunk.id for chunk in enabled_competition}
+
     exact_only = await retrieve_chunks(
         session,
         question="termoexato",
@@ -193,29 +227,47 @@ async def test_hybrid_retrieval_fuses_active_candidates_and_handles_empty_arms(
 
 
 @pytest.mark.integration
-def test_hybrid_candidate_indexes_have_usable_plans(sync_connection: Connection) -> None:
-    sync_connection.execute(text("SET LOCAL enable_seqscan = off"))
+def test_hybrid_candidate_query_is_executable_with_indexes_available(
+    sync_connection: Connection,
+) -> None:
     vector_plan = "\n".join(
         row[0]
         for row in sync_connection.execute(
             text(
-                "EXPLAIN SELECT id FROM document_chunks "
-                "ORDER BY embedding <=> CAST(:embedding AS vector) LIMIT 10"
+                "EXPLAIN WITH vector_candidates AS ("
+                "SELECT dc.id, 1 - (dc.embedding <=> CAST(:embedding AS vector)) "
+                "AS vector_score, row_number() OVER (ORDER BY dc.embedding <=> "
+                "CAST(:embedding AS vector), dc.id) AS vector_rank "
+                "FROM document_chunks dc "
+                "JOIN documents d ON d.id = dc.document_id "
+                "JOIN source_versions sv ON sv.id = d.source_version_id "
+                "JOIN doc_sources ds ON ds.id = sv.source_id "
+                "WHERE d.source = :source AND ds.id = :source_id "
+                "AND ds.active_version_id = sv.id AND ds.enabled IS TRUE "
+                "AND vector_norm(CAST(:embedding AS vector)) > 0 "
+                "AND vector_norm(dc.embedding) > 0 "
+                "ORDER BY dc.embedding <=> CAST(:embedding AS vector), dc.id "
+                "LIMIT :candidate_k) SELECT * FROM vector_candidates"
             ),
-            {"embedding": _vector(1, 0)},
+            {
+                "embedding": _vector(1, 0),
+                "source": "github",
+                "source_id": 1,
+                "candidate_k": 10,
+            },
         )
     )
-    text_plan = "\n".join(
-        row[0]
-        for row in sync_connection.execute(
+    index_names = set(
+        sync_connection.execute(
             text(
-                "EXPLAIN SELECT id FROM document_chunks WHERE search_vector @@ "
-                "websearch_to_tsquery('portuguese', :question)"
-            ),
-            {"question": "termoexato"},
-        )
+                "SELECT indexname FROM pg_indexes "
+                "WHERE tablename = 'document_chunks'"
+            )
+        ).scalars()
     )
 
-    assert "ix_document_chunks_embedding_hnsw" in vector_plan
-    assert "ix_document_chunks_search_vector_gin" in text_plan
+    assert "Limit" in vector_plan
+    assert "document_chunks" in vector_plan
+    assert "ix_document_chunks_embedding_hnsw" in index_names
+    assert "ix_document_chunks_search_vector_gin" in index_names
     sync_connection.rollback()

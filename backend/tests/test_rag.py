@@ -10,6 +10,7 @@ def make_chunk(
     chunk_id: int,
     score: float | None,
     text: str = "FastAPI runs with Uvicorn from the command line.",
+    text_score: float | None = None,
 ) -> RetrievedChunk:
     return RetrievedChunk(
         id=chunk_id,
@@ -21,9 +22,9 @@ def make_chunk(
         source_url="https://example.com/docs",
         source="github",
         vector_score=score,
-        text_score=0.1 if score is None else None,
+        text_score=text_score if text_score is not None else (0.1 if score is None else None),
         vector_rank=1 if score is not None else None,
-        text_rank=1 if score is None else None,
+        text_rank=1 if text_score is not None or score is None else None,
         fused_score=0.01,
     )
 
@@ -38,6 +39,12 @@ def test_filter_chunks_by_min_score_keeps_threshold_and_higher_scores() -> None:
 
 def test_filter_chunks_by_min_score_keeps_text_only_matches() -> None:
     assert filter_chunks_by_min_score([make_chunk(1, None)], min_score=0.5)
+
+
+def test_filter_chunks_by_min_score_keeps_dual_arm_matches_below_vector_threshold() -> None:
+    chunk = make_chunk(1, 0.1, text_score=0.4)
+
+    assert filter_chunks_by_min_score([chunk], min_score=0.5) == [chunk]
 
 
 def test_extractive_answer_uses_empty_result_message_after_filtering() -> None:
