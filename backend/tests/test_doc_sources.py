@@ -12,18 +12,27 @@ from app.services.repositories import get_or_create_doc_source, update_doc_sourc
 class FakeUpsertSession:
     def __init__(self, source: DocSource | None = None) -> None:
         self.source = source
-        self.added: DocSource | None = None
-        self.flushed = False
+        self.inserted: DocSource | None = None
+        self.executed = False
+
+    async def execute(self, statement: object) -> None:
+        assert "ON CONFLICT" in str(statement)
+        self.executed = True
+        if self.source is None:
+            self.source = DocSource(
+                source_type="github",
+                source_config={"repo": "example/project", "branch": "main", "path": "docs"},
+                repository="example/project",
+                branch="main",
+                path="docs",
+                language="pt-BR",
+                enabled=True,
+            )
+            self.inserted = self.source
 
     async def scalar(self, statement: object) -> DocSource | None:
         assert statement is not None
         return self.source
-
-    def add(self, source: DocSource) -> None:
-        self.added = source
-
-    async def flush(self) -> None:
-        self.flushed = True
 
 
 class FakeUpdateSession:
@@ -60,7 +69,7 @@ async def test_get_or_create_doc_source_creates_missing_source() -> None:
         path="docs",
     )
 
-    assert source is session.added
+    assert source is session.inserted
     assert source.source_type == "github"
     assert source.source_config["repo"] == "example/project"
     assert source.repository == "example/project"
@@ -69,7 +78,7 @@ async def test_get_or_create_doc_source_creates_missing_source() -> None:
     assert source.language == "pt-BR"
     assert source.last_sync is None
     assert source.enabled is True
-    assert session.flushed is True
+    assert session.executed is True
 
 
 @pytest.mark.asyncio
@@ -98,8 +107,8 @@ async def test_get_or_create_doc_source_returns_existing_without_mutating_sync_s
     assert source is existing
     assert source.last_sync == old_sync
     assert source.enabled is False
-    assert session.added is None
-    assert session.flushed is True
+    assert session.inserted is None
+    assert session.executed is True
 
 
 @pytest.mark.asyncio

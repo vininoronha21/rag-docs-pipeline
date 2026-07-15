@@ -12,9 +12,16 @@ from app.services.repositories import (
     SourceVersionDocument,
     create_source_version_with_documents,
     get_active_source_version,
+    get_doc_source,
+    get_doc_source_for_update,
     get_or_create_doc_source,
+    get_source_version_by_commit,
     promote_source_version,
 )
+
+
+class SourceSynchronizationConflict(RuntimeError):
+    """Raised when another synchronization promotes a different commit first."""
 
 
 @dataclass(frozen=True)
@@ -48,98 +55,171 @@ async def ingest_github_repository(
 ) -> GithubIngestionResult:
     github = GithubClient(settings)
     try:
+        repo = await github.get_repo(repo_url)
+        effective_branch = branch or repo.default_branch
+        normalized_path = normalize_repository_path(path)
+        commit_sha = await github.resolve_commit(repo, branch=effective_branch)
+
         try:
-            repo = await github.get_repo(repo_url)
-            effective_branch = branch or repo.default_branch
-            normalized_path = normalize_repository_path(path)
-            commit_sha = await github.resolve_commit(repo, branch=effective_branch)
             source = await get_or_create_doc_source(
                 session,
                 repository=repo.full_name,
                 branch=effective_branch,
                 path=normalized_path,
             )
-            active_version = await get_active_source_version(session, source=source)
-            if active_version is not None and active_version.commit_sha == commit_sha:
-                return GithubIngestionResult(
-                    status="no_op",
-                    repository=repo.full_name,
-                    branch=effective_branch,
-                    path=normalized_path,
-                    commit_sha=commit_sha,
-                    source_id=source.id,
-                    source_version_id=active_version.id,
-                    documents=[],
-                )
+            source_id = source.id
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
-            files = await github.fetch_markdown_files(
-                repo,
-                commit_sha=commit_sha,
-                path=normalized_path,
-                max_files=max_files,
+        try:
+            observed_source = await get_doc_source(session, source_id=source_id)
+            if observed_source is None:
+                raise RuntimeError("Document source no longer exists.")
+            observed_active = await get_active_source_version(session, source=observed_source)
+            observed_active_version_id = observed_source.active_version_id
+            observed_active_id = observed_active.id if observed_active is not None else None
+            observed_active_commit = (
+                observed_active.commit_sha if observed_active is not None else None
             )
-            candidate_documents: list[SourceVersionDocument] = []
-            results: list[IngestedDocumentResult] = []
-            for file in files:
-                cleaned = clean_markdown(file.content)
-                if not cleaned:
-                    continue
-                title = extract_title(cleaned, fallback=file.path.rsplit("/", maxsplit=1)[-1])
-                chunks = deduplicate_chunks(split_markdown(cleaned, source_path=file.path))
-                vectors = await embeddings.embed_texts([chunk.text for chunk in chunks])
-                candidate_documents.append(
-                    SourceVersionDocument(
-                        repository_path=file.path,
-                        source="github",
-                        source_url=file.html_url,
-                        title=title,
-                        content=cleaned,
-                        metadata={
-                            "repo": repo.full_name,
-                            "path": file.path,
-                            "sha": file.sha,
-                            "commit_sha": commit_sha,
-                        },
-                        chunks=chunks,
-                        embeddings=vectors,
-                    )
-                )
-                results.append(
-                    IngestedDocumentResult(
-                        source_url=file.html_url,
-                        title=title,
-                        chunk_count=len(chunks),
-                    )
-                )
+        except Exception:
+            await session.rollback()
+            raise
+        await session.rollback()
 
+        if observed_active_id is not None and observed_active_commit == commit_sha:
+            return _ingestion_result(
+                status="no_op",
+                repository=repo.full_name,
+                branch=effective_branch,
+                path=normalized_path,
+                commit_sha=commit_sha,
+                source_id=source_id,
+                source_version_id=observed_active_id,
+                documents=[],
+            )
+
+        files = await github.fetch_markdown_files(
+            repo,
+            commit_sha=commit_sha,
+            path=normalized_path,
+            max_files=max_files,
+        )
+        candidate_documents: list[SourceVersionDocument] = []
+        results: list[IngestedDocumentResult] = []
+        for file in files:
+            cleaned = clean_markdown(file.content)
+            if not cleaned:
+                continue
+            title = extract_title(cleaned, fallback=file.path.rsplit("/", maxsplit=1)[-1])
+            chunks = deduplicate_chunks(split_markdown(cleaned, source_path=file.path))
+            vectors = await embeddings.embed_texts([chunk.text for chunk in chunks])
+            candidate_documents.append(
+                SourceVersionDocument(
+                    repository_path=file.path,
+                    source="github",
+                    source_url=file.html_url,
+                    title=title,
+                    content=cleaned,
+                    metadata={
+                        "repo": repo.full_name,
+                        "path": file.path,
+                        "sha": file.sha,
+                        "commit_sha": commit_sha,
+                    },
+                    chunks=chunks,
+                    embeddings=vectors,
+                )
+            )
+            results.append(
+                IngestedDocumentResult(
+                    source_url=file.html_url,
+                    title=title,
+                    chunk_count=len(chunks),
+                )
+            )
+    finally:
+        await github.close()
+
+    try:
+        locked_source = await get_doc_source_for_update(session, source_id=source_id)
+        if locked_source is None:
+            raise RuntimeError("Document source no longer exists.")
+        locked_active = await get_active_source_version(session, source=locked_source)
+        if locked_active is not None and locked_active.commit_sha == commit_sha:
+            locked_active_id = locked_active.id
+            await session.rollback()
+            return _ingestion_result(
+                status="no_op",
+                repository=repo.full_name,
+                branch=effective_branch,
+                path=normalized_path,
+                commit_sha=commit_sha,
+                source_id=source_id,
+                source_version_id=locked_active_id,
+                documents=[],
+            )
+        if locked_source.active_version_id != observed_active_version_id:
+            raise SourceSynchronizationConflict(
+                "Source changed while synchronization was being prepared. Retry synchronization."
+            )
+
+        version = await get_source_version_by_commit(
+            session,
+            source_id=source_id,
+            commit_sha=commit_sha,
+        )
+        if version is None:
             version = await create_source_version_with_documents(
                 session,
-                source=source,
+                source=locked_source,
                 commit_sha=commit_sha,
                 embedding_provider=settings.embedding_provider,
                 embedding_model=_embedding_model(settings),
                 embedding_dimensions=embeddings.dimensions,
                 documents=candidate_documents,
             )
-            await promote_source_version(session, source=source, version=version, retention=5)
-            result = GithubIngestionResult(
-                status="synchronized",
-                repository=repo.full_name,
-                branch=effective_branch,
-                path=normalized_path,
-                commit_sha=commit_sha,
-                source_id=source.id,
-                source_version_id=version.id,
-                documents=results,
-            )
-        finally:
-            await github.close()
-
+        await promote_source_version(session, source=locked_source, version=version, retention=5)
+        version_id = version.id
         await session.commit()
-        return result
     except Exception:
         await session.rollback()
         raise
+
+    return _ingestion_result(
+        status="synchronized",
+        repository=repo.full_name,
+        branch=effective_branch,
+        path=normalized_path,
+        commit_sha=commit_sha,
+        source_id=source_id,
+        source_version_id=version_id,
+        documents=results,
+    )
+
+
+def _ingestion_result(
+    *,
+    status: Literal["synchronized", "no_op"],
+    repository: str,
+    branch: str,
+    path: str,
+    commit_sha: str,
+    source_id: int,
+    source_version_id: int,
+    documents: list[IngestedDocumentResult],
+) -> GithubIngestionResult:
+    return GithubIngestionResult(
+        status=status,
+        repository=repository,
+        branch=branch,
+        path=path,
+        commit_sha=commit_sha,
+        source_id=source_id,
+        source_version_id=source_version_id,
+        documents=documents,
+    )
 
 
 def _embedding_model(settings: Settings) -> str:

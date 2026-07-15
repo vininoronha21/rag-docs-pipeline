@@ -18,6 +18,19 @@ class FakePromotionSession:
         self.flush_count += 1
 
 
+class FakeCreationSession:
+    def __init__(self, source: DocSource) -> None:
+        self.source = source
+        self.actions: list[tuple[str, object]] = []
+
+    async def execute(self, statement: object) -> None:
+        self.actions.append(("execute", statement))
+
+    async def scalar(self, statement: object) -> DocSource:
+        self.actions.append(("scalar", statement))
+        return self.source
+
+
 def make_source(source_id: int, *, active_version_id: int | None = None) -> DocSource:
     return DocSource(
         id=source_id,
@@ -44,6 +57,37 @@ def make_version(version_id: int, source_id: int) -> SourceVersion:
         document_count=1,
         chunk_count=1,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_doc_source_uses_race_safe_insert_before_select() -> None:
+    source = make_source(1)
+    session = FakeCreationSession(source)
+
+    result = await repositories.get_or_create_doc_source(
+        session,
+        repository="example/project",
+        branch="main",
+        path="docs",
+    )
+
+    assert result is source
+    assert [action for action, _statement in session.actions] == ["execute", "scalar"]
+    insert_sql = str(session.actions[0][1])
+    assert "INSERT INTO doc_sources" in insert_sql
+    assert "ON CONFLICT" in insert_sql
+    assert "DO NOTHING" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_get_doc_source_for_update_locks_source_row() -> None:
+    source = make_source(1)
+    session = FakeCreationSession(source)
+
+    result = await repositories.get_doc_source_for_update(session, source_id=1)
+
+    assert result is source
+    assert "FOR UPDATE" in str(session.actions[0][1])
 
 
 @pytest.mark.asyncio

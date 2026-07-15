@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DocSource, Document, DocumentChunk, QueryLog, SourceVersion
@@ -53,15 +54,9 @@ async def get_or_create_doc_source(
     path: str,
     language: str = "pt-BR",
 ) -> DocSource:
-    source = await session.scalar(
-        select(DocSource).where(
-            DocSource.repository == repository,
-            DocSource.branch == branch,
-            DocSource.path == path,
-        )
-    )
-    if source is None:
-        source = DocSource(
+    await session.execute(
+        insert(DocSource)
+        .values(
             source_type="github",
             source_config={"repo": repository, "branch": branch, "path": path},
             repository=repository,
@@ -70,10 +65,33 @@ async def get_or_create_doc_source(
             language=language,
             enabled=True,
         )
-        session.add(source)
-
-    await session.flush()
+        .on_conflict_do_nothing(index_elements=["repository", "branch", "path"])
+    )
+    source = await session.scalar(
+        select(DocSource).where(
+            DocSource.repository == repository,
+            DocSource.branch == branch,
+            DocSource.path == path,
+        )
+    )
+    if source is None:
+        raise RuntimeError("Document source could not be created.")
     return source
+
+
+async def get_doc_source(session: AsyncSession, *, source_id: int) -> DocSource | None:
+    return await session.scalar(
+        select(DocSource).where(DocSource.id == source_id).execution_options(populate_existing=True)
+    )
+
+
+async def get_doc_source_for_update(session: AsyncSession, *, source_id: int) -> DocSource | None:
+    return await session.scalar(
+        select(DocSource)
+        .where(DocSource.id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def get_active_source_version(
@@ -85,6 +103,17 @@ async def get_active_source_version(
         select(SourceVersion).where(
             SourceVersion.id == source.active_version_id,
             SourceVersion.source_id == source.id,
+        )
+    )
+
+
+async def get_source_version_by_commit(
+    session: AsyncSession, *, source_id: int, commit_sha: str
+) -> SourceVersion | None:
+    return await session.scalar(
+        select(SourceVersion).where(
+            SourceVersion.source_id == source_id,
+            SourceVersion.commit_sha == commit_sha,
         )
     )
 

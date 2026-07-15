@@ -1,6 +1,11 @@
+import asyncio
+import os
+
 import pytest
-from sqlalchemy import Connection, select, text
+from sqlalchemy import Connection, delete, func, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from app.db.models import DocSource, Document, SourceVersion
@@ -480,3 +485,47 @@ async def test_promotion_retains_five_versions_and_retrieves_only_latest_snapsho
         ]
 
         db_session.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_concurrent_source_creation_returns_single_source(
+    sync_connection: Connection,
+) -> None:
+    assert sync_connection is not None
+    test_database_url = os.environ["TEST_DATABASE_URL"]
+    async_url = make_url(test_database_url).set(drivername="postgresql+asyncpg")
+    engine = create_async_engine(async_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_source() -> int:
+        async with session_factory() as session:
+            source = await get_or_create_doc_source(
+                session,
+                repository="concurrent/project",
+                branch="main",
+                path="docs",
+            )
+            source_id = source.id
+            await session.commit()
+            return source_id
+
+    try:
+        source_ids = await asyncio.gather(create_source(), create_source())
+        assert source_ids[0] == source_ids[1]
+
+        async with session_factory() as session:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(DocSource)
+                .where(
+                    DocSource.repository == "concurrent/project",
+                    DocSource.branch == "main",
+                    DocSource.path == "docs",
+                )
+            )
+            assert count == 1
+            await session.execute(delete(DocSource).where(DocSource.id == source_ids[0]))
+            await session.commit()
+    finally:
+        await engine.dispose()
