@@ -78,7 +78,7 @@ class Citation(BaseModel):
     chunk_id: int
     title: str | None
     source_url: str
-    score: float
+    score: float | None
     metadata: dict[str, Any]
 
 

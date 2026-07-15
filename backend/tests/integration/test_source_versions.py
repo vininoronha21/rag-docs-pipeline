@@ -476,7 +476,17 @@ async def test_promotion_retains_five_versions_and_retrieves_only_latest_snapsho
                 )
             ).all()
         )
-        chunks = await retrieve_chunks(session, embedding=vector, top_k=10, source="github")
+        chunks = await retrieve_chunks(
+            session,
+            question="active",
+            embedding=vector,
+            top_k=10,
+            candidate_k=20,
+            rrf_k=60,
+            vector_weight=0.7,
+            text_weight=0.3,
+            source="github",
+        )
 
         assert len(retained_ids) == 5
         assert versions[0].id not in retained_ids

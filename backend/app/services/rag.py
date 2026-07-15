@@ -21,7 +21,11 @@ def filter_chunks_by_min_score(
     *,
     min_score: float,
 ) -> list[RetrievedChunk]:
-    return [chunk for chunk in chunks if chunk.score >= min_score]
+    return [
+        chunk
+        for chunk in chunks
+        if chunk.vector_score is None or chunk.vector_score >= min_score
+    ]
 
 
 def filter_prompt_injection_chunks(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:

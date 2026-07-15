@@ -19,7 +19,11 @@ class RetrievedChunk:
     title: str | None
     source_url: str
     source: str
-    score: float
+    vector_score: float | None
+    text_score: float | None
+    vector_rank: int | None
+    text_rank: int | None
+    fused_score: float
 
 
 @dataclass(frozen=True)
@@ -259,16 +263,91 @@ async def get_analytics_summary(session: AsyncSession) -> AnalyticsSummary:
 async def retrieve_chunks(
     session: AsyncSession,
     *,
+    question: str,
     embedding: list[float],
     top_k: int,
+    candidate_k: int,
+    rrf_k: int,
+    vector_weight: float,
+    text_weight: float,
     source: str | None = None,
     source_id: int | None = None,
 ) -> list[RetrievedChunk]:
+    if candidate_k <= top_k:
+        raise ValueError("candidate_k must be greater than top_k")
     embedding_literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
     source_clause = "AND d.source = :source" if source else ""
     source_id_clause = "AND ds.id = :source_id" if source_id is not None else ""
     statement = text(
         f"""
+        WITH vector_candidates AS (
+            SELECT
+                dc.id,
+                1 - (dc.embedding <=> (:embedding)::vector) AS vector_score,
+                row_number() OVER (
+                    ORDER BY dc.embedding <=> (:embedding)::vector, dc.id
+                ) AS vector_rank
+            FROM document_chunks dc
+            JOIN documents d ON d.id = dc.document_id
+            JOIN source_versions sv ON sv.id = d.source_version_id
+            JOIN doc_sources ds ON ds.id = sv.source_id
+            WHERE true {source_clause} {source_id_clause}
+              AND ds.active_version_id = sv.id
+              AND ds.enabled IS TRUE
+              AND vector_norm((:embedding)::vector) > 0
+              AND vector_norm(dc.embedding) > 0
+            ORDER BY dc.embedding <=> (:embedding)::vector, dc.id
+            LIMIT :candidate_k
+        ),
+        text_candidates AS (
+            SELECT
+                dc.id,
+                ts_rank_cd(
+                    dc.search_vector,
+                    websearch_to_tsquery('portuguese', :question)
+                ) AS text_score,
+                row_number() OVER (
+                    ORDER BY
+                        ts_rank_cd(
+                            dc.search_vector,
+                            websearch_to_tsquery('portuguese', :question)
+                        ) DESC,
+                        dc.id
+                ) AS text_rank
+            FROM document_chunks dc
+            JOIN documents d ON d.id = dc.document_id
+            JOIN source_versions sv ON sv.id = d.source_version_id
+            JOIN doc_sources ds ON ds.id = sv.source_id
+            WHERE true {source_clause} {source_id_clause}
+              AND ds.active_version_id = sv.id
+              AND ds.enabled IS TRUE
+              AND dc.search_vector @@ websearch_to_tsquery('portuguese', :question)
+            ORDER BY text_score DESC, dc.id
+            LIMIT :candidate_k
+        ),
+        candidate_ids AS (
+            SELECT id FROM vector_candidates
+            UNION
+            SELECT id FROM text_candidates
+        ),
+        fused AS (
+            SELECT
+                candidate_ids.id,
+                vector_candidates.vector_score,
+                text_candidates.text_score,
+                vector_candidates.vector_rank,
+                text_candidates.text_rank,
+                coalesce(
+                    :vector_weight / (:rrf_k + vector_candidates.vector_rank),
+                    0
+                ) + coalesce(
+                    :text_weight / (:rrf_k + text_candidates.text_rank),
+                    0
+                ) AS fused_score
+            FROM candidate_ids
+            LEFT JOIN vector_candidates USING (id)
+            LEFT JOIN text_candidates USING (id)
+        )
         SELECT
             dc.id,
             dc.document_id,
@@ -278,15 +357,15 @@ async def retrieve_chunks(
             d.title,
             d.source_url,
             d.source,
-            1 - (dc.embedding <=> (:embedding)::vector) AS score
-        FROM document_chunks dc
+            fused.vector_score,
+            fused.text_score,
+            fused.vector_rank,
+            fused.text_rank,
+            fused.fused_score
+        FROM fused
+        JOIN document_chunks dc ON dc.id = fused.id
         JOIN documents d ON d.id = dc.document_id
-        JOIN source_versions sv ON sv.id = d.source_version_id
-        JOIN doc_sources ds ON ds.id = sv.source_id
-        WHERE true {source_clause} {source_id_clause}
-          AND ds.active_version_id = sv.id
-          AND ds.enabled IS TRUE
-        ORDER BY dc.embedding <=> (:embedding)::vector
+        ORDER BY fused_score DESC, dc.id ASC
         LIMIT :top_k
         """
     )
@@ -295,7 +374,12 @@ async def retrieve_chunks(
             statement,
             {
                 "embedding": embedding_literal,
+                "question": question,
                 "top_k": top_k,
+                "candidate_k": candidate_k,
+                "rrf_k": rrf_k,
+                "vector_weight": vector_weight,
+                "text_weight": text_weight,
                 "source": source,
                 **({"source_id": source_id} if source_id is not None else {}),
             },
@@ -311,7 +395,13 @@ async def retrieve_chunks(
             title=row["title"],
             source_url=row["source_url"],
             source=row["source"],
-            score=float(row["score"]),
+            vector_score=(
+                float(row["vector_score"]) if row["vector_score"] is not None else None
+            ),
+            text_score=float(row["text_score"]) if row["text_score"] is not None else None,
+            vector_rank=int(row["vector_rank"]) if row["vector_rank"] is not None else None,
+            text_rank=int(row["text_rank"]) if row["text_rank"] is not None else None,
+            fused_score=float(row["fused_score"]),
         )
         for row in rows
     ]

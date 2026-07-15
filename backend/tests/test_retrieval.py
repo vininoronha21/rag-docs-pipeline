@@ -23,17 +23,34 @@ class FakeSession:
 async def test_retrieve_chunks_requires_enabled_active_source_version() -> None:
     session = FakeSession()
 
-    chunks = await retrieve_chunks(session, embedding=[0.1, 0.2], top_k=5, source="github")
+    chunks = await retrieve_chunks(
+        session,
+        question="como executar",
+        embedding=[0.1, 0.2],
+        top_k=5,
+        candidate_k=20,
+        rrf_k=60,
+        vector_weight=0.7,
+        text_weight=0.3,
+        source="github",
+    )
 
     assert chunks == []
-    assert "JOIN source_versions sv ON sv.id = d.source_version_id" in session.statement
-    assert "JOIN doc_sources ds ON ds.id = sv.source_id" in session.statement
-    assert "ds.active_version_id = sv.id" in session.statement
-    assert "ds.enabled IS TRUE" in session.statement
-    assert "LEFT JOIN" not in session.statement
+    assert session.statement.count("JOIN source_versions sv ON sv.id = d.source_version_id") == 2
+    assert session.statement.count("JOIN doc_sources ds ON ds.id = sv.source_id") == 2
+    assert session.statement.count("ds.active_version_id = sv.id") == 2
+    assert session.statement.count("ds.enabled IS TRUE") == 2
+    assert "websearch_to_tsquery('portuguese', :question)" in session.statement
+    assert "dc.embedding <=> (:embedding)::vector" in session.statement
+    assert "ORDER BY fused_score DESC, dc.id ASC" in session.statement
     assert session.params == {
         "embedding": "[0.10000000,0.20000000]",
+        "question": "como executar",
         "top_k": 5,
+        "candidate_k": 20,
+        "rrf_k": 60,
+        "vector_weight": 0.7,
+        "text_weight": 0.3,
         "source": "github",
     }
 
@@ -44,17 +61,43 @@ async def test_retrieve_chunks_can_filter_by_internal_source_id() -> None:
 
     chunks = await retrieve_chunks(
         session,
+        question="como executar",
         embedding=[0.1, 0.2],
         top_k=5,
+        candidate_k=20,
+        rrf_k=60,
+        vector_weight=0.7,
+        text_weight=0.3,
         source="github",
         source_id=17,
     )
 
     assert chunks == []
-    assert "ds.id = :source_id" in session.statement
+    assert session.statement.count("ds.id = :source_id") == 2
+    assert session.statement.count("d.source = :source") == 2
     assert session.params == {
         "embedding": "[0.10000000,0.20000000]",
+        "question": "como executar",
         "top_k": 5,
+        "candidate_k": 20,
+        "rrf_k": 60,
+        "vector_weight": 0.7,
+        "text_weight": 0.3,
         "source": "github",
         "source_id": 17,
     }
+
+
+@pytest.mark.asyncio
+async def test_retrieve_chunks_requires_more_candidates_than_results() -> None:
+    with pytest.raises(ValueError, match="candidate_k must be greater than top_k"):
+        await retrieve_chunks(
+            FakeSession(),
+            question="como executar",
+            embedding=[0.1, 0.2],
+            top_k=5,
+            candidate_k=5,
+            rrf_k=60,
+            vector_weight=0.7,
+            text_weight=0.3,
+        )

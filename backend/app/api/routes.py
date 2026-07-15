@@ -241,7 +241,7 @@ async def query_docs(
                 chunk_id=chunk.id,
                 title=chunk.title,
                 source_url=chunk.source_url,
-                score=chunk.score,
+                score=chunk.vector_score,
                 metadata=chunk.metadata,
             )
             for chunk in result.chunks

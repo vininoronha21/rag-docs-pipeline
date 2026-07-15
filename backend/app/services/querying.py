@@ -44,8 +44,13 @@ async def run_query(
     started_at = time.perf_counter()
     query_embedding = await embeddings.embed_query(question)
     retrieval_options = {
+        "question": question,
         "embedding": query_embedding,
         "top_k": top_k,
+        "candidate_k": settings.retrieval_candidate_k,
+        "rrf_k": settings.retrieval_rrf_k,
+        "vector_weight": settings.retrieval_vector_weight,
+        "text_weight": settings.retrieval_text_weight,
         "source": source,
     }
     if source_id is not None:

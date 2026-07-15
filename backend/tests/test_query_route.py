@@ -21,7 +21,11 @@ def make_chunk(chunk_id: int, score: float, text: str) -> RetrievedChunk:
         title="Project docs",
         source_url="https://github.com/example/project/blob/main/docs/index.md",
         source="github",
-        score=score,
+        vector_score=score,
+        text_score=None,
+        vector_rank=1,
+        text_rank=None,
+        fused_score=0.01,
     )
 
 
