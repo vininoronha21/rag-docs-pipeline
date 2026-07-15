@@ -1,4 +1,9 @@
+import os
+from pathlib import Path
+
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import Connection, text
 
 
@@ -35,3 +40,77 @@ def test_schema_has_vector_extension_and_hnsw(sync_connection: Connection) -> No
 
     assert extension == "vector"
     assert index == ("hnsw", "document_chunks", "embedding", "vector_cosine_ops")
+
+
+@pytest.mark.integration
+def test_source_version_downgrade_destroys_documents_and_restores_legacy_unique_url(
+    sync_connection: Connection,
+) -> None:
+    source_id = sync_connection.execute(
+        text(
+            "INSERT INTO doc_sources "
+            "(source_type, source_config, enabled, repository, branch, path, language) "
+            "VALUES ('github', '{}', true, 'downgrade/project', 'main', 'docs', 'pt-BR') "
+            "RETURNING id"
+        )
+    ).scalar_one()
+    version_id = sync_connection.execute(
+        text(
+            "INSERT INTO source_versions "
+            "(source_id, commit_sha, embedding_provider, embedding_model, "
+            "embedding_dimensions, document_count, chunk_count) "
+            "VALUES (:source_id, :commit_sha, 'local', 'hash', 1536, 1, 0) "
+            "RETURNING id"
+        ),
+        {"source_id": source_id, "commit_sha": "d" * 40},
+    ).scalar_one()
+    sync_connection.execute(
+        text(
+            "INSERT INTO documents "
+            "(source_version_id, repository_path, source, source_url, content) "
+            "VALUES (:version_id, 'docs/downgrade.md', 'github', "
+            "'https://example.test/downgrade', 'content')"
+        ),
+        {"version_id": version_id},
+    )
+    sync_connection.commit()
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    alembic_config = Config(backend_dir / "alembic.ini")
+    alembic_config.set_main_option("script_location", str(backend_dir / "alembic"))
+    previous_database_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+
+    try:
+        command.downgrade(alembic_config, "202606170002")
+
+        document_count = sync_connection.execute(
+            text("SELECT count(*) FROM documents")
+        ).scalar_one()
+        source_url_constraints = (
+            sync_connection.execute(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conrelid = 'documents'::regclass AND contype = 'u'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        source_versions_table = sync_connection.execute(
+            text("SELECT to_regclass('source_versions')")
+        ).scalar_one()
+        sync_connection.rollback()
+
+        assert document_count == 0
+        assert source_url_constraints == ["UNIQUE (source_url)"]
+        assert source_versions_table is None
+    finally:
+        sync_connection.rollback()
+        try:
+            command.upgrade(alembic_config, "head")
+        finally:
+            if previous_database_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = previous_database_url
