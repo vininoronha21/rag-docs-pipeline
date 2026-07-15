@@ -27,7 +27,7 @@ def ingest_github(
         settings = get_settings()
         embeddings = build_embedding_provider(settings)
         async with AsyncSessionLocal() as session:
-            repository, documents = await ingest_github_repository(
+            result = await ingest_github_repository(
                 session,
                 settings=settings,
                 embeddings=embeddings,
@@ -36,8 +36,8 @@ def ingest_github(
                 path=path,
                 max_files=max_files,
             )
-        console.print(f"Ingested {len(documents)} documents from {repository}")
-        console.print(f"Total chunks: {sum(document.chunk_count for document in documents)}")
+        console.print(f"Ingested {len(result.documents)} documents from {result.repository}")
+        console.print(f"Total chunks: {sum(document.chunk_count for document in result.documents)}")
 
     asyncio.run(run())
 

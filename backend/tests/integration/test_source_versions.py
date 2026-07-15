@@ -1,9 +1,34 @@
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import DocSource, Document, SourceVersion
+from app.services.chunking import Chunk
+from app.services.repositories import (
+    SourceVersionDocument,
+    create_source_version_with_documents,
+    get_or_create_doc_source,
+    promote_source_version,
+    retrieve_chunks,
+)
+
+
+class AsyncSessionFacade:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, item: object) -> None:
+        self.session.add(item)
+
+    async def flush(self) -> None:
+        self.session.flush()
+
+    async def scalar(self, statement: object) -> object:
+        return self.session.scalar(statement)
+
+    async def execute(self, statement: object, params: dict[str, object] | None = None) -> object:
+        return self.session.execute(statement, params or {})
 
 
 def _insert_source(connection: Connection, *, repository: str = "example/project") -> int:
@@ -53,6 +78,7 @@ def test_orm_metadata_matches_source_version_ownership() -> None:
     assert active_version_fk.use_alter is True
     assert next(iter(Document.source_version_id.foreign_keys)).ondelete == "CASCADE"
     assert "doc_source_id" not in Document.__table__.columns
+    assert not hasattr(Document, "doc_source_id")
     assert not hasattr(Document, "doc_source")
     assert not hasattr(DocSource, "documents")
     assert SourceVersion.source.property.back_populates == "versions"
@@ -376,3 +402,81 @@ def test_deleting_source_cascades_versions(sync_connection: Connection) -> None:
     finally:
         transaction.rollback()
         sync_connection.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_promotion_retains_five_versions_and_retrieves_only_latest_snapshot(
+    sync_connection: Connection,
+) -> None:
+    vector = [1.0] + [0.0] * 1535
+    with Session(bind=sync_connection, expire_on_commit=False) as db_session:
+        session = AsyncSessionFacade(db_session)
+        source = await get_or_create_doc_source(
+            session,
+            repository="retention/project",
+            branch="main",
+            path="docs",
+        )
+        versions: list[SourceVersion] = []
+
+        for index in range(1, 7):
+            commit_sha = f"{index:040x}"
+            repository_path = "docs/current.md" if index == 6 else "docs/removed.md"
+            document = SourceVersionDocument(
+                repository_path=repository_path,
+                source="github",
+                source_url=(
+                    f"https://github.com/retention/project/blob/{commit_sha}/{repository_path}"
+                ),
+                title=f"Version {index}",
+                content=f"Version {index} content",
+                metadata={"commit_sha": commit_sha, "path": repository_path},
+                chunks=[
+                    Chunk(
+                        text=f"Version {index} content",
+                        index=0,
+                        metadata={"source_path": repository_path},
+                        content_hash=f"{index:064x}",
+                    )
+                ],
+                embeddings=[vector],
+            )
+            version = await create_source_version_with_documents(
+                session,
+                source=source,
+                commit_sha=commit_sha,
+                embedding_provider="local",
+                embedding_model="hash",
+                embedding_dimensions=1536,
+                documents=[document],
+            )
+            await promote_source_version(session, source=source, version=version)
+            versions.append(version)
+
+        db_session.flush()
+        retained_ids = set(
+            db_session.scalars(
+                select(SourceVersion.id).where(SourceVersion.source_id == source.id)
+            ).all()
+        )
+        active_paths = set(
+            db_session.scalars(
+                select(Document.repository_path).where(
+                    Document.source_version_id == source.active_version_id
+                )
+            ).all()
+        )
+        chunks = await retrieve_chunks(session, embedding=vector, top_k=10, source="github")
+
+        assert len(retained_ids) == 5
+        assert versions[0].id not in retained_ids
+        assert versions[-1].id in retained_ids
+        assert source.active_version_id == versions[-1].id
+        assert source.last_sync == versions[-1].synced_at
+        assert active_paths == {"docs/current.md"}
+        assert [chunk.source_url for chunk in chunks] == [
+            f"https://github.com/retention/project/blob/{versions[-1].commit_sha}/docs/current.md"
+        ]
+
+        db_session.rollback()

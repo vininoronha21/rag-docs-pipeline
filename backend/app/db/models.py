@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -41,9 +41,6 @@ class Document(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("source_version_id", "repository_path", name="uq_documents_version_path"),
     )
-
-    # Temporary non-persisted input for the pre-version repository API removed in Task 3.
-    doc_source_id: ClassVar[int | None] = None
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source_version_id: Mapped[int] = mapped_column(

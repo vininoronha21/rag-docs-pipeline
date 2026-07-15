@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from app.api import routes
 from app.db.models import DocSource
 from app.schemas import DocSourceItem, DocSourceListResponse, DocSourceUpdateRequest
-from app.services.repositories import update_doc_source_enabled, upsert_doc_source
+from app.services.repositories import get_or_create_doc_source, update_doc_source_enabled
 
 
 class FakeUpsertSession:
@@ -50,48 +50,54 @@ class FakeRouteSession:
 
 
 @pytest.mark.asyncio
-async def test_upsert_doc_source_creates_missing_source() -> None:
-    synced_at = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
+async def test_get_or_create_doc_source_creates_missing_source() -> None:
     session = FakeUpsertSession()
 
-    source = await upsert_doc_source(
+    source = await get_or_create_doc_source(
         session,
-        source_type="github",
-        source_config={"repo": "example/project", "branch": "main", "path": ""},
-        last_sync=synced_at,
+        repository="example/project",
+        branch="main",
+        path="docs",
     )
 
     assert source is session.added
     assert source.source_type == "github"
     assert source.source_config["repo"] == "example/project"
-    assert source.last_sync == synced_at
+    assert source.repository == "example/project"
+    assert source.branch == "main"
+    assert source.path == "docs"
+    assert source.language == "pt-BR"
+    assert source.last_sync is None
     assert source.enabled is True
     assert session.flushed is True
 
 
 @pytest.mark.asyncio
-async def test_upsert_doc_source_updates_existing_source() -> None:
+async def test_get_or_create_doc_source_returns_existing_without_mutating_sync_state() -> None:
     old_sync = datetime(2026, 6, 16, 12, 0, tzinfo=UTC)
-    new_sync = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
     existing = DocSource(
         id=3,
         source_type="github",
         source_config={"repo": "example/project", "branch": "main", "path": ""},
+        repository="example/project",
+        branch="main",
+        path="",
+        language="pt-BR",
         last_sync=old_sync,
         enabled=False,
     )
     session = FakeUpsertSession(existing)
 
-    source = await upsert_doc_source(
+    source = await get_or_create_doc_source(
         session,
-        source_type="github",
-        source_config=existing.source_config,
-        last_sync=new_sync,
+        repository="example/project",
+        branch="main",
+        path="",
     )
 
     assert source is existing
-    assert source.last_sync == new_sync
-    assert source.enabled is True
+    assert source.last_sync == old_sync
+    assert source.enabled is False
     assert session.added is None
     assert session.flushed is True
 

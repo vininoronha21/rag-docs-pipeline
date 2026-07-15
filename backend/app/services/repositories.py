@@ -1,11 +1,10 @@
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DocSource, Document, DocumentChunk, QueryLog
+from app.db.models import DocSource, Document, DocumentChunk, QueryLog, SourceVersion
 from app.services.chunking import Chunk
 
 
@@ -34,87 +33,144 @@ class AnalyticsSummary:
     negative_feedback_count: int
 
 
-async def upsert_document_with_chunks(
+@dataclass(frozen=True)
+class SourceVersionDocument:
+    repository_path: str
+    source: str
+    source_url: str
+    title: str | None
+    content: str
+    metadata: dict[str, Any]
+    chunks: list[Chunk]
+    embeddings: list[list[float]]
+
+
+async def get_or_create_doc_source(
     session: AsyncSession,
     *,
-    source: str,
-    source_url: str,
-    title: str | None,
-    content: str,
-    metadata: dict[str, Any],
-    chunks: list[Chunk],
-    embeddings: list[list[float]],
-    doc_source_id: int | None = None,
-) -> Document:
-    if len(chunks) != len(embeddings):
-        raise ValueError("Expected one embedding per chunk.")
-
-    existing = await session.scalar(select(Document).where(Document.source_url == source_url))
-    if existing is None:
-        document = Document(
-            doc_source_id=doc_source_id,
-            source=source,
-            source_url=source_url,
-            title=title,
-            content=content,
-            doc_metadata=metadata,
-        )
-        session.add(document)
-        await session.flush()
-    else:
-        document = existing
-        document.doc_source_id = doc_source_id
-        document.source = source
-        document.title = title
-        document.content = content
-        document.doc_metadata = metadata
-        await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-        await session.flush()
-
-    for chunk, embedding in zip(chunks, embeddings, strict=True):
-        session.add(
-            DocumentChunk(
-                document_id=document.id,
-                chunk_text=chunk.text,
-                chunk_index=chunk.index,
-                chunk_hash=chunk.content_hash,
-                embedding=embedding,
-                chunk_metadata=chunk.metadata,
-            )
-        )
-
-    await session.flush()
-    return document
-
-
-async def upsert_doc_source(
-    session: AsyncSession,
-    *,
-    source_type: str,
-    source_config: dict[str, Any],
-    last_sync: datetime,
-    enabled: bool = True,
+    repository: str,
+    branch: str,
+    path: str,
+    language: str = "pt-BR",
 ) -> DocSource:
     source = await session.scalar(
         select(DocSource).where(
-            DocSource.source_type == source_type,
-            DocSource.source_config == source_config,
+            DocSource.repository == repository,
+            DocSource.branch == branch,
+            DocSource.path == path,
         )
     )
     if source is None:
         source = DocSource(
-            source_type=source_type,
-            source_config=source_config,
-            last_sync=last_sync,
-            enabled=enabled,
+            source_type="github",
+            source_config={"repo": repository, "branch": branch, "path": path},
+            repository=repository,
+            branch=branch,
+            path=path,
+            language=language,
+            enabled=True,
         )
         session.add(source)
-    else:
-        source.last_sync = last_sync
-        source.enabled = enabled
 
     await session.flush()
     return source
+
+
+async def get_active_source_version(
+    session: AsyncSession, *, source: DocSource
+) -> SourceVersion | None:
+    if source.active_version_id is None:
+        return None
+    return await session.scalar(
+        select(SourceVersion).where(
+            SourceVersion.id == source.active_version_id,
+            SourceVersion.source_id == source.id,
+        )
+    )
+
+
+async def create_source_version_with_documents(
+    session: AsyncSession,
+    *,
+    source: DocSource,
+    commit_sha: str,
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_dimensions: int,
+    documents: list[SourceVersionDocument],
+) -> SourceVersion:
+    for document in documents:
+        if len(document.chunks) != len(document.embeddings):
+            raise ValueError("Expected one embedding per chunk.")
+        if any(len(embedding) != embedding_dimensions for embedding in document.embeddings):
+            raise ValueError("Embedding dimensions do not match the source version.")
+
+    version = SourceVersion(
+        source_id=source.id,
+        commit_sha=commit_sha,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
+        document_count=len(documents),
+        chunk_count=sum(len(document.chunks) for document in documents),
+    )
+    session.add(version)
+    await session.flush()
+
+    for candidate in documents:
+        document = Document(
+            source_version_id=version.id,
+            repository_path=candidate.repository_path,
+            source=candidate.source,
+            source_url=candidate.source_url,
+            title=candidate.title,
+            content=candidate.content,
+            doc_metadata=candidate.metadata,
+        )
+        session.add(document)
+        await session.flush()
+        for chunk, embedding in zip(candidate.chunks, candidate.embeddings, strict=True):
+            session.add(
+                DocumentChunk(
+                    document_id=document.id,
+                    chunk_text=chunk.text,
+                    chunk_index=chunk.index,
+                    chunk_hash=chunk.content_hash,
+                    embedding=embedding,
+                    chunk_metadata=chunk.metadata,
+                )
+            )
+
+    await session.flush()
+    return version
+
+
+async def promote_source_version(
+    session: AsyncSession,
+    *,
+    source: DocSource,
+    version: SourceVersion,
+    retention: int = 5,
+) -> None:
+    if version.source_id != source.id:
+        raise ValueError("Source version does not belong to source.")
+    if retention < 1:
+        raise ValueError("Retention must be at least one version.")
+
+    source.active_version_id = version.id
+    source.last_sync = version.synced_at
+    await session.flush()
+
+    obsolete_versions = (
+        select(SourceVersion.id)
+        .where(
+            SourceVersion.source_id == source.id,
+            SourceVersion.id != version.id,
+        )
+        .order_by(SourceVersion.synced_at.desc(), SourceVersion.id.desc())
+        .offset(retention - 1)
+    )
+    await session.execute(delete(SourceVersion).where(SourceVersion.id.in_(obsolete_versions)))
 
 
 async def list_doc_sources(session: AsyncSession) -> list[DocSource]:
@@ -186,9 +242,11 @@ async def retrieve_chunks(
             1 - (dc.embedding <=> (:embedding)::vector) AS score
         FROM document_chunks dc
         JOIN documents d ON d.id = dc.document_id
-        LEFT JOIN doc_sources ds ON ds.id = d.doc_source_id
+        JOIN source_versions sv ON sv.id = d.source_version_id
+        JOIN doc_sources ds ON ds.id = sv.source_id
         WHERE true {source_clause}
-          AND (d.doc_source_id IS NULL OR ds.enabled IS TRUE)
+          AND ds.active_version_id = sv.id
+          AND ds.enabled IS TRUE
         ORDER BY dc.embedding <=> (:embedding)::vector
         LIMIT :top_k
         """

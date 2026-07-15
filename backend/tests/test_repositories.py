@@ -1,128 +1,81 @@
+from datetime import UTC, datetime
+
 import pytest
 
-from app.db.models import Document, DocumentChunk
-from app.services.chunking import Chunk
-from app.services.repositories import upsert_document_with_chunks
+from app.db.models import DocSource, SourceVersion
+from app.services import repositories
 
 
-class FakeDocumentSession:
-    def __init__(self, existing: Document | None = None) -> None:
-        self.existing = existing
-        self.added: list[object] = []
+class FakePromotionSession:
+    def __init__(self) -> None:
         self.executed: list[object] = []
         self.flush_count = 0
-
-    async def scalar(self, statement: object) -> Document | None:
-        assert statement is not None
-        return self.existing
-
-    def add(self, item: object) -> None:
-        self.added.append(item)
 
     async def execute(self, statement: object) -> None:
         self.executed.append(statement)
 
     async def flush(self) -> None:
         self.flush_count += 1
-        for item in self.added:
-            if isinstance(item, Document) and item.id is None:
-                item.id = 10
 
 
-def make_chunk(index: int, text: str = "Run the server.") -> Chunk:
-    return Chunk(
-        text=text,
-        index=index,
-        metadata={"section": "Run", "source_path": "docs/index.md"},
-        content_hash=f"hash-{index}",
+def make_source(source_id: int, *, active_version_id: int | None = None) -> DocSource:
+    return DocSource(
+        id=source_id,
+        source_type="github",
+        source_config={"repo": "example/project", "branch": "main", "path": "docs"},
+        repository="example/project",
+        branch="main",
+        path="docs",
+        language="pt-BR",
+        active_version_id=active_version_id,
+        enabled=True,
+    )
+
+
+def make_version(version_id: int, source_id: int) -> SourceVersion:
+    return SourceVersion(
+        id=version_id,
+        source_id=source_id,
+        commit_sha=f"{version_id:040x}",
+        synced_at=datetime(2026, 7, 14, 12, 0, tzinfo=UTC),
+        embedding_provider="local",
+        embedding_model="hash",
+        embedding_dimensions=2,
+        document_count=1,
+        chunk_count=1,
     )
 
 
 @pytest.mark.asyncio
-async def test_upsert_document_with_chunks_creates_document_and_chunks() -> None:
-    session = FakeDocumentSession()
+async def test_promote_source_version_rejects_cross_source_before_mutation() -> None:
+    session = FakePromotionSession()
+    source = make_source(1, active_version_id=7)
+    version = make_version(8, source_id=2)
 
-    document = await upsert_document_with_chunks(
-        session,
-        source="github",
-        source_url="https://github.com/example/project/blob/main/docs/index.md",
-        title="Install",
-        content="# Install\n\nRun the server.",
-        metadata={"repo": "example/project", "path": "docs/index.md"},
-        chunks=[make_chunk(0)],
-        embeddings=[[1.0, 0.0]],
-        doc_source_id=3,
-    )
+    with pytest.raises(ValueError, match="does not belong to source"):
+        await repositories.promote_source_version(session, source=source, version=version)
 
-    chunks = [item for item in session.added if isinstance(item, DocumentChunk)]
-    assert document in session.added
-    assert document.id == 10
-    assert document.doc_source_id == 3
-    assert document.source == "github"
-    assert document.title == "Install"
-    assert document.doc_metadata["repo"] == "example/project"
-    assert len(chunks) == 1
-    assert chunks[0].document_id == 10
-    assert chunks[0].chunk_text == "Run the server."
-    assert chunks[0].chunk_hash == "hash-0"
-    assert chunks[0].embedding == [1.0, 0.0]
-    assert session.flush_count == 2
-
-
-@pytest.mark.asyncio
-async def test_upsert_document_with_chunks_updates_existing_document() -> None:
-    existing = Document(
-        id=5,
-        doc_source_id=1,
-        source="github",
-        source_url="https://github.com/example/project/blob/main/docs/index.md",
-        title="Old title",
-        content="Old content",
-        doc_metadata={"repo": "old"},
-    )
-    session = FakeDocumentSession(existing)
-
-    document = await upsert_document_with_chunks(
-        session,
-        source="github",
-        source_url=existing.source_url,
-        title="New title",
-        content="New content",
-        metadata={"repo": "example/project"},
-        chunks=[make_chunk(0, "Updated content.")],
-        embeddings=[[0.0, 1.0]],
-        doc_source_id=9,
-    )
-
-    chunks = [item for item in session.added if isinstance(item, DocumentChunk)]
-    assert document is existing
-    assert existing.doc_source_id == 9
-    assert existing.title == "New title"
-    assert existing.content == "New content"
-    assert existing.doc_metadata == {"repo": "example/project"}
-    assert len(session.executed) == 1
-    assert len(chunks) == 1
-    assert chunks[0].document_id == 5
-    assert chunks[0].chunk_text == "Updated content."
-    assert session.flush_count == 2
-
-
-@pytest.mark.asyncio
-async def test_upsert_document_with_chunks_rejects_embedding_count_mismatch() -> None:
-    session = FakeDocumentSession()
-
-    with pytest.raises(ValueError, match="Expected one embedding per chunk"):
-        await upsert_document_with_chunks(
-            session,
-            source="github",
-            source_url="https://github.com/example/project/blob/main/docs/index.md",
-            title="Install",
-            content="# Install",
-            metadata={},
-            chunks=[make_chunk(0), make_chunk(1)],
-            embeddings=[[1.0, 0.0]],
-        )
-
-    assert session.added == []
+    assert source.active_version_id == 7
+    assert source.last_sync is None
     assert session.executed == []
     assert session.flush_count == 0
+
+
+@pytest.mark.asyncio
+async def test_promote_source_version_updates_pointer_sync_and_prunes_inactive_versions() -> None:
+    session = FakePromotionSession()
+    source = make_source(1, active_version_id=7)
+    version = make_version(8, source_id=1)
+
+    await repositories.promote_source_version(session, source=source, version=version, retention=5)
+
+    assert source.active_version_id == 8
+    assert source.last_sync == version.synced_at
+    assert session.flush_count == 1
+    assert len(session.executed) == 1
+    sql = str(session.executed[0])
+    assert "source_versions.source_id" in sql
+    assert "source_versions.id !=" in sql
+    assert "source_versions.synced_at DESC" in sql
+    assert "source_versions.id DESC" in sql
+    assert "OFFSET" in sql

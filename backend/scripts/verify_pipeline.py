@@ -102,9 +102,7 @@ async def verify_tables_exist() -> bool:
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                text(
-                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
-                )
+                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             )
             found = {row[0] for row in result.fetchall()}
         missing = expected - found
@@ -122,7 +120,7 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
     """Ingest a small real GitHub repository and return (ok, doc_count, chunk_count)."""
     try:
         async with AsyncSessionLocal() as session:
-            repository, documents = await ingest_github_repository(
+            result = await ingest_github_repository(
                 session,
                 settings=settings,
                 embeddings=embeddings,
@@ -131,8 +129,8 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
                 path="",
                 max_files=VERIFY_MAX_FILES,
             )
-        doc_count = len(documents)
-        chunk_count = sum(d.chunk_count for d in documents)
+        doc_count = len(result.documents)
+        chunk_count = sum(d.chunk_count for d in result.documents)
         if doc_count < VERIFY_MIN_DOCS:
             _fail(
                 "Ingest documents",
@@ -147,7 +145,7 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
             return False, doc_count, chunk_count
         _pass(
             "Ingest documents and chunks",
-            f"{doc_count} documents, {chunk_count} chunks from {repository}",
+            f"{doc_count} documents, {chunk_count} chunks from {result.repository}",
         )
         return True, doc_count, chunk_count
     except Exception as exc:  # noqa: BLE001
@@ -186,19 +184,22 @@ async def verify_persistence() -> tuple[bool, dict[str, int]]:
                 _fail(f"Persistence: {table}", f"expected >= {minimum}, got {counts[table]}")
                 ok = False
 
-        # doc_sources must be linked: verify documents have doc_source_id set
+        # Every document must be owned by a source version.
         async with AsyncSessionLocal() as session:
             linked = (
                 await session.execute(
                     select(func.count())
                     .select_from(Document)
-                    .where(Document.doc_source_id.is_not(None))
+                    .where(Document.source_version_id.is_not(None))
                 )
             ).scalar_one()
         if linked >= VERIFY_MIN_DOCS:
-            _pass("Documents linked to doc_source", f"{linked} linked")
+            _pass("Documents linked to source versions", f"{linked} linked")
         else:
-            _fail("Documents linked to doc_source", f"expected >= {VERIFY_MIN_DOCS}, got {linked}")
+            _fail(
+                "Documents linked to source versions",
+                f"expected >= {VERIFY_MIN_DOCS}, got {linked}",
+            )
             ok = False
 
         return ok, counts

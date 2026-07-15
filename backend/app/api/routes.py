@@ -80,7 +80,7 @@ async def ingest_github(
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> IngestResponse:
     try:
-        repository, results = await ingest_github_repository(
+        result = await ingest_github_repository(
             session,
             settings=settings,
             embeddings=embeddings,
@@ -108,14 +108,14 @@ async def ingest_github(
 
     documents = [
         IngestedDocument(
-            source_url=result.source_url,
-            title=result.title,
-            chunk_count=result.chunk_count,
+            source_url=document.source_url,
+            title=document.title,
+            chunk_count=document.chunk_count,
         )
-        for result in results
+        for document in result.documents
     ]
     return IngestResponse(
-        repository=repository,
+        repository=result.repository,
         documents=documents,
         total_chunks=sum(document.chunk_count for document in documents),
     )
