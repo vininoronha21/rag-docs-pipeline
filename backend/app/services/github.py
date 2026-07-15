@@ -156,13 +156,19 @@ class GithubClient:
             )
             raw = await self._get(entry_download_url)
             raw.raise_for_status()
+            try:
+                content = raw.content.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise GithubClientError(
+                    "GitHub returned an invalid UTF-8 file response. Try again later."
+                ) from exc
             files.append(
                 GithubFile(
                     path=entry_path,
                     sha=entry_sha,
                     html_url=entry_html_url,
                     download_url=entry_download_url,
-                    content=raw.text,
+                    content=content,
                 )
             )
         return files
@@ -190,6 +196,10 @@ class GithubClient:
             )
             if isinstance(payload, list):
                 items = payload
+                if len(items) >= 1_000:
+                    raise GithubClientError(
+                        "GitHub directory response may be truncated. Narrow the repository path."
+                    )
             elif isinstance(payload, dict):
                 items = [payload]
             else:

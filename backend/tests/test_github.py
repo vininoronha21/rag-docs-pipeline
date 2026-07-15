@@ -10,11 +10,19 @@ from app.services.github import (
 
 
 class FakeResponse:
-    text = "# Docs"
-
-    def __init__(self, payload: object, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: object,
+        status_code: int = 200,
+        content: bytes = b"# Docs",
+    ) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.content = content
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -185,6 +193,33 @@ async def test_fetch_markdown_files_fails_when_max_files_would_be_exceeded() -> 
 
 
 @pytest.mark.asyncio
+async def test_fetch_markdown_files_rejects_possibly_truncated_directory() -> None:
+    http_client = FakeGithubHttpClient(
+        [
+            FakeResponse(
+                [
+                    {
+                        "type": "file",
+                        "path": f"docs/file-{index}.txt",
+                        "name": f"file-{index}.txt",
+                        "sha": f"blob-{index}",
+                    }
+                    for index in range(1_000)
+                ]
+            )
+        ]
+    )
+    client = make_client(http_client)
+
+    with pytest.raises(GithubClientError, match="directory response may be truncated"):
+        await client.fetch_markdown_files(
+            make_repo(), commit_sha="c" * 40, path="docs", max_files=2_000
+        )
+
+    assert len(http_client.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_markdown_files_rejects_entries_outside_curated_path() -> None:
     client = make_client(
         FakeGithubHttpClient([FakeResponse([{"type": "dir", "path": "other/private"}])])
@@ -194,6 +229,59 @@ async def test_fetch_markdown_files_rejects_entries_outside_curated_path() -> No
         await client.fetch_markdown_files(
             make_repo(), commit_sha="c" * 40, path="docs", max_files=50
         )
+
+
+@pytest.mark.asyncio
+async def test_fetch_markdown_files_rejects_invalid_utf8_content() -> None:
+    client = make_client(
+        FakeGithubHttpClient(
+            [
+                FakeResponse(
+                    [
+                        {
+                            "type": "file",
+                            "path": "docs/index.md",
+                            "name": "index.md",
+                            "sha": "index-blob",
+                        }
+                    ]
+                ),
+                FakeResponse(None, content=b"\xff"),
+            ]
+        )
+    )
+
+    with pytest.raises(GithubClientError, match="invalid UTF-8 file response"):
+        await client.fetch_markdown_files(
+            make_repo(), commit_sha="d" * 40, path="docs", max_files=50
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_markdown_files_preserves_valid_utf8_content() -> None:
+    client = make_client(
+        FakeGithubHttpClient(
+            [
+                FakeResponse(
+                    [
+                        {
+                            "type": "file",
+                            "path": "docs/index.md",
+                            "name": "index.md",
+                            "sha": "index-blob",
+                        }
+                    ]
+                ),
+                FakeResponse(None, content=b"# Ol\xc3\xa1"),
+            ]
+        )
+    )
+
+    files = await client.fetch_markdown_files(
+        make_repo(), commit_sha="e" * 40, path="docs", max_files=50
+    )
+
+    assert [file.content for file in files] == ["# Ol\u00e1"]
 
 
 @pytest.mark.asyncio
