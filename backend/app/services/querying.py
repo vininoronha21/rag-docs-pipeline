@@ -1,5 +1,6 @@
 import time
 from dataclasses import dataclass
+from urllib.parse import quote
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,12 +92,24 @@ async def run_query(
 
     top_fused_score = chunks[0].fused_score if chunks else None
     score_gap = chunks[0].fused_score - chunks[1].fused_score if len(chunks) > 1 else None
-    has_sufficient_evidence = top_fused_score is not None and (
+    meets_retrieval_thresholds = top_fused_score is not None and (
         top_fused_score >= settings.retrieval_min_fused_score
         and (score_gap is None or score_gap >= settings.retrieval_min_score_gap)
     )
-    state: EvidenceState = "answered" if has_sufficient_evidence else "insufficient_evidence"
-    answer = build_extractive_answer(question, chunks) if state == "answered" else None
+    candidate_answer = (
+        build_extractive_answer(question, chunks) if meets_retrieval_thresholds else None
+    )
+    used_chunk_ids = (
+        {sentence.chunk_id for sentence in candidate_answer.sentences}
+        if candidate_answer is not None
+        else set()
+    )
+    has_lexical_support = any(
+        chunk.id in used_chunk_ids and chunk.text_score is not None and chunk.text_score > 0
+        for chunk in chunks
+    )
+    state: EvidenceState = "answered" if has_lexical_support else "insufficient_evidence"
+    answer = candidate_answer if state == "answered" else None
     evidence = (
         _build_answer_evidence(answer, chunks)
         if answer is not None
@@ -110,17 +123,21 @@ async def run_query(
         top_fused_score=top_fused_score,
         score_gap=score_gap,
     )
-    event = await log_query_event(
-        session,
-        state=state,
-        latency_ms=latency_ms,
-        retrieved_chunk_count=len(chunks),
-        source_ids=sorted({chunk.source_id for chunk in chunks}),
-        source_version_ids=sorted({chunk.source_version_id for chunk in chunks}),
-        top_fused_score=top_fused_score,
-        score_gap=score_gap,
-    )
-    await session.commit()
+    try:
+        event = await log_query_event(
+            session,
+            state=state,
+            latency_ms=latency_ms,
+            retrieved_chunk_count=len(chunks),
+            source_ids=sorted({chunk.source_id for chunk in chunks}),
+            source_version_ids=sorted({chunk.source_version_id for chunk in chunks}),
+            top_fused_score=top_fused_score,
+            score_gap=score_gap,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     return QueryExecutionResult(
         event_id=event.id,
         state=state,
@@ -174,8 +191,9 @@ def _build_evidence(
 
 def _immutable_source_url(chunk: RetrievedChunk) -> str:
     if chunk.source == "github":
+        encoded_path = quote(chunk.repository_path, safe="/")
         return (
             f"https://github.com/{chunk.repository}/blob/"
-            f"{chunk.commit_sha}/{chunk.repository_path}"
+            f"{chunk.commit_sha}/{encoded_path}"
         )
     return chunk.source_url

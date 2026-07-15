@@ -8,11 +8,32 @@ from app.services.repositories import RetrievedChunk
 
 
 class FakeSession:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        flush_error: Exception | None = None,
+        commit_error: Exception | None = None,
+    ) -> None:
         self.committed = False
+        self.rolled_back = False
+        self.flush_error = flush_error
+        self.commit_error = commit_error
+        self.added: object | None = None
+
+    def add(self, item: object) -> None:
+        self.added = item
+
+    async def flush(self) -> None:
+        if self.flush_error is not None:
+            raise self.flush_error
 
     async def commit(self) -> None:
+        if self.commit_error is not None:
+            raise self.commit_error
         self.committed = True
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
 
 
 class FakeEmbeddings:
@@ -30,8 +51,10 @@ def make_chunk(
     fused_score: float,
     text: str,
     vector_score: float = 0.8,
+    text_score: float | None = 0.4,
     source_id: int = 7,
     source_version_id: int = 11,
+    repository_path: str = "docs/index.md",
 ) -> RetrievedChunk:
     return RetrievedChunk(
         id=chunk_id,
@@ -41,14 +64,14 @@ def make_chunk(
         metadata={"section": "Run"},
         title="Project docs",
         repository="example/project",
-        repository_path="docs/index.md",
+        repository_path=repository_path,
         commit_sha="a" * 40,
         source_url="https://github.com/example/project/blob/main/docs/index.md",
         source="github",
         source_id=source_id,
         source_version_id=source_version_id,
         vector_score=vector_score,
-        text_score=0.4,
+        text_score=text_score,
         vector_rank=1,
         text_rank=2,
         fused_score=fused_score,
@@ -197,6 +220,130 @@ async def test_run_query_returns_inspection_evidence_when_fused_gap_is_insuffici
     assert captured_event["state"] == "insufficient_evidence"
     assert captured_event["source_ids"] == [7, 8]
     assert captured_event["source_version_ids"] == [11, 12]
+
+
+@pytest.mark.asyncio
+async def test_run_query_refuses_fallback_without_lexical_support_from_used_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunks = [
+        make_chunk(
+            20,
+            fused_score=0.02,
+            text="Unrelated deployment details.",
+            text_score=None,
+        ),
+        make_chunk(
+            21,
+            fused_score=0.015,
+            text="Another unrelated appendix.",
+            text_score=0.8,
+        ),
+    ]
+    captured_event: dict[str, object] = {}
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return chunks
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured_event.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    result = await querying.run_query(
+        FakeSession(),
+        question="How do I configure authentication?",
+        top_k=5,
+        source=None,
+        settings=settings(),
+        embeddings=FakeEmbeddings(),
+    )
+
+    assert result.state == "insufficient_evidence"
+    assert result.answer is None
+    assert [item.chunk_id for item in result.evidence] == [20, 21]
+    assert all(item.citation_id is None for item in result.evidence)
+    assert captured_event["state"] == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_run_query_rolls_back_when_query_event_flush_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession(flush_error=RuntimeError("flush failed"))
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return []
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+
+    with pytest.raises(RuntimeError, match="flush failed"):
+        await querying.run_query(
+            session,
+            question="Unknown topic",
+            top_k=5,
+            source=None,
+            settings=settings(),
+            embeddings=FakeEmbeddings(),
+        )
+
+    assert session.rolled_back is True
+    assert session.committed is False
+    assert session.added is not None
+
+
+@pytest.mark.asyncio
+async def test_run_query_rolls_back_when_query_event_commit_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession(commit_error=RuntimeError("commit failed"))
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return []
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await querying.run_query(
+            session,
+            question="Unknown topic",
+            top_k=5,
+            source=None,
+            settings=settings(),
+            embeddings=FakeEmbeddings(),
+        )
+
+    assert session.rolled_back is True
+    assert session.committed is False
+
+
+@pytest.mark.parametrize(
+    ("repository_path", "encoded_path"),
+    [
+        ("docs/My File #1?.md", "docs/My%20File%20%231%3F.md"),
+        ("docs/100%/acao-ação.md", "docs/100%25/acao-a%C3%A7%C3%A3o.md"),
+    ],
+)
+def test_immutable_source_url_percent_encodes_repository_path(
+    repository_path: str,
+    encoded_path: str,
+) -> None:
+    chunk = make_chunk(
+        30,
+        fused_score=0.02,
+        text="Supported text.",
+        repository_path=repository_path,
+    )
+
+    assert querying._immutable_source_url(chunk) == (
+        f"https://github.com/example/project/blob/{'a' * 40}/{encoded_path}"
+    )
 
 
 @pytest.mark.asyncio

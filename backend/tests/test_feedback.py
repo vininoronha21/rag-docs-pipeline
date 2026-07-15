@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.db.models import QueryEvent
-from app.schemas import QueryFeedbackRequest
+from app.schemas import QueryFeedbackRequest, QueryFeedbackResponse
 from app.services.repositories import update_query_event_feedback
 
 
@@ -29,6 +29,19 @@ def test_query_feedback_accepts_only_negative_and_positive_scores() -> None:
     for value in (0, 2, -2):
         with pytest.raises(ValidationError):
             QueryFeedbackRequest(feedback=value)
+
+
+def test_query_feedback_response_accepts_only_negative_and_positive_scores() -> None:
+    event_id = uuid4()
+    assert QueryFeedbackResponse(event_id=event_id, feedback=-1).feedback == -1
+    assert QueryFeedbackResponse(event_id=event_id, feedback=1).feedback == 1
+    with pytest.raises(ValidationError):
+        QueryFeedbackResponse(event_id=event_id, feedback=0)
+
+    assert QueryFeedbackResponse.model_json_schema()["properties"]["feedback"]["enum"] == [
+        -1,
+        1,
+    ]
 
 
 @pytest.mark.asyncio

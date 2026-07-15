@@ -121,4 +121,4 @@ class QueryFeedbackRequest(BaseModel):
 
 class QueryFeedbackResponse(BaseModel):
     event_id: UUID
-    feedback: int
+    feedback: Literal[-1, 1]
