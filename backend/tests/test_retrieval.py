@@ -48,8 +48,8 @@ async def test_retrieve_chunks_requires_enabled_active_source_version() -> None:
     )
 
     assert chunks == []
-    assert session.statement.count("JOIN source_versions sv ON sv.id = d.source_version_id") == 2
-    assert session.statement.count("JOIN doc_sources ds ON ds.id = sv.source_id") == 2
+    assert session.statement.count("JOIN source_versions sv ON sv.id = d.source_version_id") == 3
+    assert session.statement.count("JOIN doc_sources ds ON ds.id = sv.source_id") == 3
     assert session.statement.count("ds.active_version_id = sv.id") == 2
     assert session.statement.count("ds.enabled IS TRUE") == 2
     assert "websearch_to_tsquery('portuguese', :question)" in session.statement

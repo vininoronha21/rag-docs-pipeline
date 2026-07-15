@@ -8,7 +8,7 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.services.embeddings import build_embedding_provider
 from app.services.pipeline import ingest_github_repository
-from app.services.querying import run_query
+from app.services.querying import QueryExecutionResult, run_query
 
 cli = typer.Typer(help="RAG Docs Pipeline command line tools.")
 console = Console()
@@ -77,13 +77,27 @@ def query(
     """Run a semantic search query against the local vector database."""
 
     try:
-        answer, query_id, retrieved_chunk_count, latency_ms = asyncio.run(
-            _run_query(question, top_k=top_k, source=source)
-        )
+        result = asyncio.run(_run_query(question, top_k=top_k, source=source))
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(answer)
-    console.print(f"Query {query_id}: {retrieved_chunk_count} chunks in {latency_ms}ms")
+    if result.answer is None:
+        console.print("Insufficient evidence to answer. Best retrieved excerpts:")
+    else:
+        citation_ids = {
+            item.chunk_id: item.citation_id
+            for item in result.evidence
+            if item.citation_id is not None
+        }
+        for sentence in result.answer.sentences:
+            citation = citation_ids.get(sentence.chunk_id)
+            suffix = f" [{citation}]" if citation else ""
+            console.print(f"{sentence.text}{suffix}")
+    for item in result.evidence:
+        console.print(f"- {item.title or item.repository_path}: {item.source_url}")
+    console.print(
+        f"Event {result.event_id} ({result.state}): "
+        f"{result.metrics.retrieved_chunk_count} chunks in {result.metrics.latency_ms}ms"
+    )
 
 
 async def _run_query(
@@ -91,7 +105,7 @@ async def _run_query(
     *,
     top_k: int,
     source: str | None,
-) -> tuple[str, int, int, int]:
+) -> QueryExecutionResult:
     settings = get_settings()
     embeddings = build_embedding_provider(settings)
     async with AsyncSessionLocal() as session:
@@ -103,7 +117,7 @@ async def _run_query(
             settings=settings,
             embeddings=embeddings,
         )
-    return result.answer, result.query_id, result.retrieved_chunk_count, result.latency_ms
+    return result
 
 
 if __name__ == "__main__":

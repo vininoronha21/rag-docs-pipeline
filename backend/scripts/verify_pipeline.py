@@ -300,35 +300,40 @@ async def verify_query(
                 source_id=target.source_id,
             )
 
-        has_answer = bool(result.answer.strip())
-        has_chunks = result.retrieved_chunk_count > 0
-        latency_ok = result.latency_ms >= 0
-        query_id_ok = result.query_id > 0
+        answer_text = (
+            " ".join(sentence.text for sentence in result.answer.sentences)
+            if result.answer is not None
+            else ""
+        )
+        has_answer = bool(answer_text.strip())
+        has_chunks = result.metrics.retrieved_chunk_count > 0
+        latency_ok = result.metrics.latency_ms >= 0
+        event_id_ok = bool(result.event_id)
 
         if has_answer:
-            _pass("Query returns an answer", textwrap.shorten(result.answer, 80))
+            _pass("Query returns an answer", textwrap.shorten(answer_text, 80))
         else:
             _fail("Query returns an answer", "empty answer")
 
         if has_chunks:
             _pass(
                 "Query retrieves chunks",
-                f"{result.retrieved_chunk_count} chunks in {result.latency_ms}ms",
+                f"{result.metrics.retrieved_chunk_count} chunks in {result.metrics.latency_ms}ms",
             )
         else:
             _fail("Query retrieves chunks", "0 chunks retrieved — check source filtering")
 
         if latency_ok:
-            _pass("Query latency recorded", f"{result.latency_ms}ms")
+            _pass("Query latency recorded", f"{result.metrics.latency_ms}ms")
         else:
-            _fail("Query latency recorded", f"unexpected value: {result.latency_ms}")
+            _fail("Query latency recorded", f"unexpected value: {result.metrics.latency_ms}")
 
-        if query_id_ok:
-            _pass("Query log persisted", f"query_id={result.query_id}")
+        if event_id_ok:
+            _pass("Anonymous query event persisted", f"event_id={result.event_id}")
         else:
-            _fail("Query log persisted", f"unexpected query_id={result.query_id}")
+            _fail("Anonymous query event persisted", f"unexpected event_id={result.event_id}")
 
-        return has_answer and has_chunks and latency_ok and query_id_ok
+        return has_answer and has_chunks and latency_ok and event_id_ok
 
     except Exception as exc:  # noqa: BLE001
         _fail("Query execution", str(exc))
@@ -371,7 +376,7 @@ async def verify_source_disable(
                     embeddings=embeddings,
                     source_id=source_id,
                 )
-            chunks_when_disabled = result.retrieved_chunk_count
+            chunks_when_disabled = result.metrics.retrieved_chunk_count
         finally:
             async with AsyncSessionLocal() as session:
                 source = await session.get(DocSource, source_id)

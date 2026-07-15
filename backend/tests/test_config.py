@@ -40,6 +40,8 @@ def test_settings_hybrid_retrieval_defaults_are_valid() -> None:
     assert settings.retrieval_rrf_k > 0
     assert settings.retrieval_vector_weight > 0
     assert settings.retrieval_text_weight > 0
+    assert settings.retrieval_min_fused_score >= 0
+    assert settings.retrieval_min_score_gap >= 0
 
 
 @pytest.mark.parametrize(
@@ -51,6 +53,8 @@ def test_settings_hybrid_retrieval_defaults_are_valid() -> None:
         ("retrieval_vector_weight", -0.1),
         ("retrieval_text_weight", 0),
         ("retrieval_text_weight", -0.1),
+        ("retrieval_min_fused_score", -0.1),
+        ("retrieval_min_score_gap", -0.1),
     ],
 )
 def test_settings_reject_invalid_hybrid_retrieval_values(field: str, value: float) -> None:

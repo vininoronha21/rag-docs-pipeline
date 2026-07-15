@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID as UUIDValue
@@ -146,20 +145,6 @@ class QueryEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-
-
-@dataclass
-class QueryLog:
-    """Unmapped Sprint 02 compatibility object; query content cannot persist at schema head."""
-
-    id: int = 0
-    user_query: str = ""
-    retrieved_chunks_ids: list[int] | None = None
-    llm_response: str = ""
-    user_feedback: int | None = None
-    latency_ms: int = 0
-    retrieved_chunk_count: int = 0
-    created_at: datetime | None = None
 
 
 class DocSource(Base):

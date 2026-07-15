@@ -57,6 +57,16 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum pgvector cosine similarity score required before answering.",
     )
+    retrieval_min_fused_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum leading reciprocal-rank-fusion score required to answer.",
+    )
+    retrieval_min_score_gap: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum fused-score gap from the second result when one exists.",
+    )
     retrieval_candidate_k: int = Field(
         default=50,
         gt=12,

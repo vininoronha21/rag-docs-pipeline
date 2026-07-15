@@ -3,7 +3,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import Connection, inspect, text
 
-from app.db.models import DocumentChunk, QueryEvent, QueryLog
+from app.db.models import DocumentChunk, QueryEvent
 
 
 @pytest.mark.integration
@@ -68,7 +68,6 @@ def test_query_event_defaults_and_checks_are_enforced(sync_connection: Connectio
 
 
 def test_orm_matches_anonymous_event_and_generated_search_schema() -> None:
-    assert not hasattr(QueryLog, "__table__")
     assert set(QueryEvent.__table__.columns.keys()) == {
         "id",
         "state",

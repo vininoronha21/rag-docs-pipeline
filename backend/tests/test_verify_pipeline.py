@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from typing import Any, Literal
+from uuid import uuid4
 
 import pytest
 from scripts import verify_pipeline
@@ -240,16 +241,14 @@ async def test_verify_query_cannot_use_another_enabled_github_source(
         source_ids.append(source_id)
         if source_id == 3:
             return SimpleNamespace(
-                answer="",
-                retrieved_chunk_count=0,
-                latency_ms=1,
-                query_id=10,
+                answer=None,
+                metrics=SimpleNamespace(retrieved_chunk_count=0, latency_ms=1),
+                event_id=uuid4(),
             )
         return SimpleNamespace(
-            answer="Answer from unrelated enabled GitHub source",
-            retrieved_chunk_count=1,
-            latency_ms=1,
-            query_id=11,
+            answer=SimpleNamespace(sentences=[SimpleNamespace(text="Unrelated answer")]),
+            metrics=SimpleNamespace(retrieved_chunk_count=1, latency_ms=1),
+            event_id=uuid4(),
         )
 
     monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", FakeSession)
@@ -272,10 +271,9 @@ async def test_verify_query_proves_positive_retrieval_for_target_source(
     async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
         assert kwargs["source_id"] == 3
         return SimpleNamespace(
-            answer="Answer from synchronized source",
-            retrieved_chunk_count=1,
-            latency_ms=1,
-            query_id=10,
+            answer=SimpleNamespace(sentences=[SimpleNamespace(text="Synchronized answer")]),
+            metrics=SimpleNamespace(retrieved_chunk_count=1, latency_ms=1),
+            event_id=uuid4(),
         )
 
     monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", FakeSession)
@@ -303,7 +301,7 @@ async def test_verify_source_disable_is_source_specific_and_restores_exact_state
 
     async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
         query_source_ids.append(kwargs.get("source_id"))
-        return SimpleNamespace(retrieved_chunk_count=0)
+        return SimpleNamespace(metrics=SimpleNamespace(retrieved_chunk_count=0))
 
     monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
     monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)

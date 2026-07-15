@@ -1,13 +1,16 @@
 from dataclasses import dataclass
 from math import isfinite
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DocSource, Document, DocumentChunk, QueryLog, SourceVersion
+from app.db.models import DocSource, Document, DocumentChunk, QueryEvent, SourceVersion
 from app.services.chunking import Chunk
+
+EvidenceState = Literal["answered", "insufficient_evidence"]
 
 
 @dataclass(frozen=True)
@@ -18,8 +21,13 @@ class RetrievedChunk:
     chunk_index: int
     metadata: dict[str, Any]
     title: str | None
+    repository: str
+    repository_path: str
+    commit_sha: str
     source_url: str
     source: str
+    source_id: int
+    source_version_id: int
     vector_score: float | None
     text_score: float | None
     vector_rank: int | None
@@ -241,13 +249,15 @@ async def get_analytics_summary(session: AsyncSession) -> AnalyticsSummary:
     enabled_source_count = await session.scalar(
         select(func.count()).select_from(DocSource).where(DocSource.enabled.is_(True))
     )
-    query_count = await _count_rows(session, QueryLog)
-    average_latency = await session.scalar(select(func.coalesce(func.avg(QueryLog.latency_ms), 0)))
+    query_count = await _count_rows(session, QueryEvent)
+    average_latency = await session.scalar(
+        select(func.coalesce(func.avg(QueryEvent.latency_ms), 0))
+    )
     positive_feedback_count = await session.scalar(
-        select(func.count()).select_from(QueryLog).where(QueryLog.user_feedback == 1)
+        select(func.count()).select_from(QueryEvent).where(QueryEvent.feedback == 1)
     )
     negative_feedback_count = await session.scalar(
-        select(func.count()).select_from(QueryLog).where(QueryLog.user_feedback == -1)
+        select(func.count()).select_from(QueryEvent).where(QueryEvent.feedback == -1)
     )
     return AnalyticsSummary(
         document_count=document_count,
@@ -370,8 +380,13 @@ async def retrieve_chunks(
             dc.chunk_index,
             dc.chunk_metadata,
             d.title,
+            ds.repository,
+            d.repository_path,
+            sv.commit_sha,
             d.source_url,
             d.source,
+            ds.id AS source_id,
+            sv.id AS source_version_id,
             fused.vector_score,
             fused.text_score,
             fused.vector_rank,
@@ -380,6 +395,8 @@ async def retrieve_chunks(
         FROM fused
         JOIN document_chunks dc ON dc.id = fused.id
         JOIN documents d ON d.id = dc.document_id
+        JOIN source_versions sv ON sv.id = d.source_version_id
+        JOIN doc_sources ds ON ds.id = sv.source_id
         ORDER BY fused_score DESC, dc.id ASC
         LIMIT :top_k
         """
@@ -408,8 +425,13 @@ async def retrieve_chunks(
             chunk_index=row["chunk_index"],
             metadata=row["chunk_metadata"] or {},
             title=row["title"],
+            repository=row["repository"],
+            repository_path=row["repository_path"],
+            commit_sha=row["commit_sha"],
             source_url=row["source_url"],
             source=row["source"],
+            source_id=row["source_id"],
+            source_version_id=row["source_version_id"],
             vector_score=(
                 float(row["vector_score"]) if row["vector_score"] is not None else None
             ),
@@ -422,60 +444,48 @@ async def retrieve_chunks(
     ]
 
 
-async def log_query(
+async def log_query_event(
     session: AsyncSession,
     *,
-    question: str,
-    retrieved_chunk_ids: list[int],
-    answer: str,
+    state: EvidenceState,
     latency_ms: int,
     retrieved_chunk_count: int,
-) -> QueryLog:
-    query = QueryLog(
-        user_query=question,
-        retrieved_chunks_ids=retrieved_chunk_ids,
-        llm_response=answer,
+    source_ids: list[int],
+    source_version_ids: list[int],
+    top_fused_score: float | None,
+    score_gap: float | None,
+) -> QueryEvent:
+    event = QueryEvent(
+        state=state,
         latency_ms=latency_ms,
         retrieved_chunk_count=retrieved_chunk_count,
+        source_ids=sorted(set(source_ids)),
+        source_version_ids=sorted(set(source_version_ids)),
+        top_fused_score=top_fused_score,
+        score_gap=score_gap,
     )
-    session.add(query)
+    session.add(event)
     await session.flush()
-    return query
+    return event
 
 
 async def _count_rows(
     session: AsyncSession,
-    model: type[Document | DocumentChunk | DocSource | QueryLog],
+    model: type[Document | DocumentChunk | DocSource | QueryEvent],
 ) -> int:
     count = await session.scalar(select(func.count()).select_from(model))
     return count or 0
 
 
-async def list_queries(
+async def update_query_event_feedback(
     session: AsyncSession,
     *,
-    limit: int,
-    offset: int,
-) -> tuple[list[QueryLog], int]:
-    total = await session.scalar(select(func.count()).select_from(QueryLog))
-    result = await session.scalars(
-        select(QueryLog)
-        .order_by(QueryLog.created_at.desc(), QueryLog.id.desc())
-        .limit(limit)
-        .offset(offset)
-    )
-    return list(result.all()), total or 0
-
-
-async def update_query_feedback(
-    session: AsyncSession,
-    *,
-    query_id: int,
+    event_id: UUID,
     feedback: int,
-) -> QueryLog | None:
-    query = await session.get(QueryLog, query_id)
-    if query is None:
+) -> QueryEvent | None:
+    event = await session.get(QueryEvent, event_id)
+    if event is None:
         return None
-    query.user_feedback = feedback
+    event.feedback = feedback
     await session.flush()
-    return query
+    return event

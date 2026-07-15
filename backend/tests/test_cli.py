@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from typing import Literal
+from uuid import UUID
 
 import pytest
 import typer
@@ -7,7 +8,8 @@ from typer.testing import CliRunner
 
 from app import cli as cli_module
 from app.services.pipeline import GithubIngestionResult, IngestedDocumentResult
-from app.services.querying import QueryExecutionResult
+from app.services.querying import QueryExecutionMetrics, QueryExecutionResult
+from app.services.rag import CitedSentence, ExtractiveAnswer
 
 
 class FakeSession:
@@ -147,12 +149,22 @@ async def test_cli_query_filters_logs_and_returns_result(monkeypatch: pytest.Mon
             "embeddings": embeddings,
         }
         return QueryExecutionResult(
-            query_id=7,
-            answer="FastAPI runs with Uvicorn from the command line.",
-            chunks=[],
-            retrieved_chunk_ids=[3],
-            latency_ms=15,
-            retrieved_chunk_count=1,
+            event_id=UUID("2be66d42-8f42-4e9d-aa38-51b514607c38"),
+            state="answered",
+            answer=ExtractiveAnswer(
+                sentences=[
+                    CitedSentence(
+                        text="FastAPI runs with Uvicorn from the command line.", chunk_id=3
+                    )
+                ]
+            ),
+            evidence=[],
+            metrics=QueryExecutionMetrics(
+                latency_ms=15,
+                retrieved_chunk_count=1,
+                top_fused_score=0.02,
+                score_gap=None,
+            ),
         )
 
     monkeypatch.setattr(cli_module, "get_settings", lambda: settings)
@@ -160,15 +172,16 @@ async def test_cli_query_filters_logs_and_returns_result(monkeypatch: pytest.Mon
     monkeypatch.setattr(cli_module, "AsyncSessionLocal", lambda: session)
     monkeypatch.setattr(cli_module, "run_query", fake_run_query)
 
-    answer, query_id, retrieved_chunk_count, _latency_ms = await cli_module._run_query(
+    result = await cli_module._run_query(
         "How do I run FastAPI?",
         top_k=5,
         source="github",
     )
 
-    assert "FastAPI runs with Uvicorn" in answer
-    assert query_id == 7
-    assert retrieved_chunk_count == 1
+    assert result.answer is not None
+    assert "FastAPI runs with Uvicorn" in result.answer.sentences[0].text
+    assert str(result.event_id) == "2be66d42-8f42-4e9d-aa38-51b514607c38"
+    assert result.metrics.retrieved_chunk_count == 1
 
 
 def test_cli_query_returns_bad_parameter_for_invalid_question(
@@ -183,3 +196,30 @@ def test_cli_query_returns_bad_parameter_for_invalid_question(
         cli_module.query(" ", top_k=5)
 
     assert "at least two" in str(exc_info.value)
+
+
+def test_cli_query_renders_insufficient_state_without_fabricated_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_query(*args: object, **kwargs: object) -> QueryExecutionResult:
+        return QueryExecutionResult(
+            event_id=UUID("2be66d42-8f42-4e9d-aa38-51b514607c38"),
+            state="insufficient_evidence",
+            answer=None,
+            evidence=[],
+            metrics=QueryExecutionMetrics(
+                latency_ms=15,
+                retrieved_chunk_count=0,
+                top_fused_score=None,
+                score_gap=None,
+            ),
+        )
+
+    monkeypatch.setattr(cli_module, "_run_query", fake_run_query)
+
+    result = CliRunner().invoke(cli_module.cli, ["query", "unknown topic"])
+
+    assert result.exit_code == 0
+    assert "Insufficient evidence" in result.output
+    assert "None" not in result.output
+    assert "insufficient_evidence" in result.output

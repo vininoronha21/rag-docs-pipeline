@@ -156,6 +156,11 @@ async def test_hybrid_retrieval_fuses_active_candidates_and_handles_empty_arms(
     assert fused[0].id == fused_id
     assert fused[0].vector_rank is not None
     assert fused[0].text_rank is not None
+    assert fused[0].repository == "hybrid/active"
+    assert fused[0].repository_path == "docs/fused.md"
+    assert fused[0].source_id == active_source_id
+    assert fused[0].source_version_id == active_version_id
+    assert fused[0].commit_sha == "active".rjust(40, "0")
     assert {chunk.id for chunk in fused} == {fused_id, vector_id, exact_id}
     assert inactive_id not in {chunk.id for chunk in fused}
     assert disabled_id not in {chunk.id for chunk in fused}
