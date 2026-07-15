@@ -1,18 +1,22 @@
 import asyncio
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import Connection, delete, func, select, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from app.db.models import DocSource, Document, SourceVersion
+from app.services import pipeline
 from app.services.chunking import Chunk
 from app.services.repositories import (
     SourceVersionDocument,
     create_source_version_with_documents,
+    get_doc_source_for_update,
     get_or_create_doc_source,
     promote_source_version,
     retrieve_chunks,
@@ -527,5 +531,228 @@ async def test_concurrent_source_creation_returns_single_source(
             assert count == 1
             await session.execute(delete(DocSource).where(DocSource.id == source_ids[0]))
             await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_source_row_lock_blocks_then_refreshes_updated_state(
+    sync_connection: Connection,
+) -> None:
+    assert sync_connection is not None
+    async_url = make_url(os.environ["TEST_DATABASE_URL"]).set(drivername="postgresql+asyncpg")
+    engine = create_async_engine(async_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as setup:
+            source = await get_or_create_doc_source(
+                setup,
+                repository="locking/project",
+                branch="main",
+                path="docs",
+            )
+            source_id = source.id
+            await setup.commit()
+
+        async with session_factory() as first, session_factory() as second:
+            locked = await get_doc_source_for_update(first, source_id=source_id)
+            assert locked is not None
+
+            await second.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            with pytest.raises(DBAPIError) as exc_info:
+                await get_doc_source_for_update(second, source_id=source_id)
+            assert "lock timeout" in str(exc_info.value).lower()
+            await second.rollback()
+
+            locked.enabled = False
+            await first.commit()
+
+            refreshed = await get_doc_source_for_update(second, source_id=source_id)
+            assert refreshed is not None
+            assert refreshed.enabled is False
+            await second.rollback()
+
+        async with session_factory() as cleanup:
+            await cleanup.execute(delete(DocSource).where(DocSource.id == source_id))
+            await cleanup.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_real_revalidation_rejects_stale_promotion(
+    sync_connection: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert sync_connection is not None
+    async_url = make_url(os.environ["TEST_DATABASE_URL"]).set(drivername="postgresql+asyncpg")
+    engine = create_async_engine(async_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    old_sha = "1" * 40
+    newer_sha = "2" * 40
+    stale_sha = "3" * 40
+    newer_version_id: int | None = None
+
+    async def promote_newer_version(*args: object, **kwargs: object) -> list[SimpleNamespace]:
+        nonlocal newer_version_id
+        async with session_factory() as competitor:
+            source = await competitor.scalar(
+                select(DocSource).where(DocSource.repository == "revalidation/project")
+            )
+            assert source is not None
+            locked = await get_doc_source_for_update(competitor, source_id=source.id)
+            assert locked is not None
+            version = await create_source_version_with_documents(
+                competitor,
+                source=locked,
+                commit_sha=newer_sha,
+                embedding_provider="local",
+                embedding_model="hash",
+                embedding_dimensions=1536,
+                documents=[],
+            )
+            await promote_source_version(competitor, source=locked, version=version)
+            newer_version_id = version.id
+            await competitor.commit()
+        return [
+            SimpleNamespace(
+                path="docs/index.md",
+                html_url=f"https://github.com/revalidation/project/blob/{stale_sha}/docs/index.md",
+                sha="4" * 40,
+                content="# Stale snapshot",
+            )
+        ]
+
+    github = SimpleNamespace(
+        get_repo=AsyncMock(
+            return_value=SimpleNamespace(full_name="revalidation/project", default_branch="main")
+        ),
+        resolve_commit=AsyncMock(return_value=stale_sha),
+        fetch_markdown_files=AsyncMock(side_effect=promote_newer_version),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(pipeline, "GithubClient", lambda _settings: github)
+    embeddings = SimpleNamespace(
+        dimensions=1536,
+        embed_texts=AsyncMock(return_value=[[1.0] + [0.0] * 1535]),
+    )
+    settings = SimpleNamespace(
+        embedding_provider="local",
+        openai_embedding_model="text-embedding-3-small",
+    )
+
+    try:
+        async with session_factory() as setup:
+            source = await get_or_create_doc_source(
+                setup,
+                repository="revalidation/project",
+                branch="main",
+                path="docs",
+            )
+            old_version = await create_source_version_with_documents(
+                setup,
+                source=source,
+                commit_sha=old_sha,
+                embedding_provider="local",
+                embedding_model="hash",
+                embedding_dimensions=1536,
+                documents=[],
+            )
+            await promote_source_version(setup, source=source, version=old_version)
+            source_id = source.id
+            await setup.commit()
+
+        async with session_factory() as stale_session:
+            with pytest.raises(pipeline.SourceSynchronizationConflict):
+                await pipeline.ingest_github_repository(
+                    stale_session,
+                    settings=settings,
+                    embeddings=embeddings,
+                    repo_url="https://github.com/revalidation/project",
+                    branch="main",
+                    path="docs",
+                    max_files=50,
+                )
+
+        async with session_factory() as verification:
+            source = await verification.get(DocSource, source_id)
+            assert source is not None
+            assert source.active_version_id == newer_version_id
+            stale_count = await verification.scalar(
+                select(func.count())
+                .select_from(SourceVersion)
+                .where(
+                    SourceVersion.source_id == source_id,
+                    SourceVersion.commit_sha == stale_sha,
+                )
+            )
+            assert stale_count == 0
+            await verification.execute(delete(DocSource).where(DocSource.id == source_id))
+            await verification.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_failed_first_preparation_does_not_create_source(
+    sync_connection: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert sync_connection is not None
+    async_url = make_url(os.environ["TEST_DATABASE_URL"]).set(drivername="postgresql+asyncpg")
+    engine = create_async_engine(async_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    commit_sha = "5" * 40
+    github = SimpleNamespace(
+        get_repo=AsyncMock(
+            return_value=SimpleNamespace(full_name="failed/project", default_branch="main")
+        ),
+        resolve_commit=AsyncMock(return_value=commit_sha),
+        fetch_markdown_files=AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    path="docs/index.md",
+                    html_url=(f"https://github.com/failed/project/blob/{commit_sha}/docs/index.md"),
+                    sha="6" * 40,
+                    content="# Fails before persistence",
+                )
+            ]
+        ),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr(pipeline, "GithubClient", lambda _settings: github)
+    embeddings = SimpleNamespace(
+        dimensions=1536,
+        embed_texts=AsyncMock(side_effect=RuntimeError("embedding failure")),
+    )
+    settings = SimpleNamespace(
+        embedding_provider="local",
+        openai_embedding_model="text-embedding-3-small",
+    )
+
+    try:
+        async with session_factory() as session:
+            with pytest.raises(RuntimeError, match="embedding failure"):
+                await pipeline.ingest_github_repository(
+                    session,
+                    settings=settings,
+                    embeddings=embeddings,
+                    repo_url="https://github.com/failed/project",
+                    branch="main",
+                    path="docs",
+                    max_files=50,
+                )
+
+        async with session_factory() as verification:
+            source_count = await verification.scalar(
+                select(func.count())
+                .select_from(DocSource)
+                .where(DocSource.repository == "failed/project")
+            )
+            assert source_count == 0
     finally:
         await engine.dispose()

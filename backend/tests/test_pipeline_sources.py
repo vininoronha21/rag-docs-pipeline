@@ -31,9 +31,20 @@ class FakeEmbeddings:
     def __init__(self, session: FakeSession) -> None:
         async def embed(texts: list[str]) -> list[list[float]]:
             assert session.transaction_open is False
+            assert session.commits == 0
             return [[1.0, 0.0] for _text in texts]
 
         self.embed_texts = AsyncMock(side_effect=embed)
+
+
+class FailingEmbeddings(FakeEmbeddings):
+    def __init__(self, session: FakeSession) -> None:
+        async def fail(texts: list[str]) -> list[list[float]]:
+            assert session.transaction_open is False
+            assert session.commits == 0
+            raise RuntimeError("embedding failure")
+
+        self.embed_texts = AsyncMock(side_effect=fail)
 
 
 def make_settings() -> SimpleNamespace:
@@ -60,6 +71,7 @@ def install_github(
 
     async def fetch(*args: object, **kwargs: object) -> list[SimpleNamespace]:
         assert session.transaction_open is False
+        assert session.commits == 0
         if before_fetch is not None:
             before_fetch()
         return [
@@ -89,20 +101,25 @@ def install_repositories(
     locked_source: SimpleNamespace,
     locked_active: SimpleNamespace | None,
     existing_version: SimpleNamespace | None = None,
+    source_exists: bool = True,
 ) -> dict[str, AsyncMock]:
-    source = SimpleNamespace(id=9, active_version_id=getattr(observed_active, "id", None))
+    source = (
+        SimpleNamespace(id=9, active_version_id=getattr(observed_active, "id", None))
+        if source_exists
+        else None
+    )
 
     async def get_or_create(*args: object, **kwargs: object) -> SimpleNamespace:
         session.transaction_open = True
-        return source
+        return locked_source
 
-    active_values = iter([observed_active, locked_active])
+    active_values = iter(([observed_active] if source_exists else []) + [locked_active])
 
     async def get_active(*args: object, **kwargs: object) -> SimpleNamespace | None:
         session.transaction_open = True
         return next(active_values)
 
-    async def get_source(*args: object, **kwargs: object) -> SimpleNamespace:
+    async def get_source(*args: object, **kwargs: object) -> SimpleNamespace | None:
         session.transaction_open = True
         return source
 
@@ -117,7 +134,7 @@ def install_repositories(
     candidate = SimpleNamespace(id=12, source_id=9, synced_at=None)
     mocks = {
         "get_or_create_doc_source": AsyncMock(side_effect=get_or_create),
-        "get_doc_source": AsyncMock(side_effect=get_source),
+        "get_doc_source_by_identity": AsyncMock(side_effect=get_source),
         "get_active_source_version": AsyncMock(side_effect=get_active),
         "get_doc_source_for_update": AsyncMock(side_effect=lock_source),
         "get_source_version_by_commit": AsyncMock(side_effect=get_version),
@@ -162,7 +179,7 @@ async def test_preliminary_no_op_closes_read_transaction(
 
     assert result.status == "no_op"
     assert session.transaction_open is False
-    assert session.commits == 1
+    assert session.commits == 0
     assert session.rollbacks == 1
     github.fetch_markdown_files.assert_not_awaited()
 
@@ -185,7 +202,7 @@ async def test_external_preparation_runs_without_database_transaction(
     result = await ingest(session, FakeEmbeddings(session))
 
     assert result.status == "synchronized"
-    assert session.commits == 2
+    assert session.commits == 1
     assert session.rollbacks == 1
     mocks["create_source_version_with_documents"].assert_awaited_once()
 
@@ -212,7 +229,7 @@ async def test_same_sha_promoted_during_preparation_returns_no_op(
     assert result.status == "no_op"
     assert result.source_version_id == 13
     assert session.transaction_open is False
-    assert session.commits == 1
+    assert session.commits == 0
     assert session.rollbacks == 2
     mocks["create_source_version_with_documents"].assert_not_awaited()
     mocks["promote_source_version"].assert_not_awaited()
@@ -238,7 +255,7 @@ async def test_different_active_version_promoted_during_preparation_raises_confl
         await ingest(session, FakeEmbeddings(session))
 
     assert session.transaction_open is False
-    assert session.commits == 1
+    assert session.commits == 0
     assert session.rollbacks == 2
     mocks["create_source_version_with_documents"].assert_not_awaited()
     mocks["promote_source_version"].assert_not_awaited()
@@ -267,7 +284,7 @@ async def test_retained_same_sha_is_reused_without_insert(
     assert result.source_version_id == 8
     mocks["create_source_version_with_documents"].assert_not_awaited()
     assert mocks["promote_source_version"].await_args.kwargs["version"] is retained
-    assert session.commits == 2
+    assert session.commits == 1
     assert session.rollbacks == 1
 
 
@@ -290,6 +307,29 @@ async def test_final_persistence_failure_rolls_back(
     with pytest.raises(RuntimeError, match="database failure"):
         await ingest(session, FakeEmbeddings(session))
 
-    assert session.commits == 1
+    assert session.commits == 0
     assert session.rollbacks == 2
     assert session.transaction_open is False
+
+
+@pytest.mark.asyncio
+async def test_missing_source_is_not_created_when_embedding_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    install_github(monkeypatch, session)
+    mocks = install_repositories(
+        monkeypatch,
+        session,
+        observed_active=None,
+        locked_source=SimpleNamespace(id=9, active_version_id=None),
+        locked_active=None,
+        source_exists=False,
+    )
+
+    with pytest.raises(RuntimeError, match="embedding failure"):
+        await ingest(session, FailingEmbeddings(session))
+
+    assert session.commits == 0
+    assert session.transaction_open is False
+    mocks["get_or_create_doc_source"].assert_not_awaited()

@@ -79,9 +79,17 @@ async def get_or_create_doc_source(
     return source
 
 
-async def get_doc_source(session: AsyncSession, *, source_id: int) -> DocSource | None:
+async def get_doc_source_by_identity(
+    session: AsyncSession, *, repository: str, branch: str, path: str
+) -> DocSource | None:
     return await session.scalar(
-        select(DocSource).where(DocSource.id == source_id).execution_options(populate_existing=True)
+        select(DocSource)
+        .where(
+            DocSource.repository == repository,
+            DocSource.branch == branch,
+            DocSource.path == path,
+        )
+        .execution_options(populate_existing=True)
     )
 
 

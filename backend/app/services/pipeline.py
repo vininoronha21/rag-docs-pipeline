@@ -12,7 +12,7 @@ from app.services.repositories import (
     SourceVersionDocument,
     create_source_version_with_documents,
     get_active_source_version,
-    get_doc_source,
+    get_doc_source_by_identity,
     get_doc_source_for_update,
     get_or_create_doc_source,
     get_source_version_by_commit,
@@ -61,24 +61,21 @@ async def ingest_github_repository(
         commit_sha = await github.resolve_commit(repo, branch=effective_branch)
 
         try:
-            source = await get_or_create_doc_source(
+            observed_source = await get_doc_source_by_identity(
                 session,
                 repository=repo.full_name,
                 branch=effective_branch,
                 path=normalized_path,
             )
-            source_id = source.id
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-
-        try:
-            observed_source = await get_doc_source(session, source_id=source_id)
-            if observed_source is None:
-                raise RuntimeError("Document source no longer exists.")
-            observed_active = await get_active_source_version(session, source=observed_source)
-            observed_active_version_id = observed_source.active_version_id
+            observed_active = (
+                await get_active_source_version(session, source=observed_source)
+                if observed_source is not None
+                else None
+            )
+            observed_active_version_id = (
+                observed_source.active_version_id if observed_source is not None else None
+            )
+            observed_source_id = observed_source.id if observed_source is not None else None
             observed_active_id = observed_active.id if observed_active is not None else None
             observed_active_commit = (
                 observed_active.commit_sha if observed_active is not None else None
@@ -88,14 +85,18 @@ async def ingest_github_repository(
             raise
         await session.rollback()
 
-        if observed_active_id is not None and observed_active_commit == commit_sha:
+        if (
+            observed_source_id is not None
+            and observed_active_id is not None
+            and observed_active_commit == commit_sha
+        ):
             return _ingestion_result(
                 status="no_op",
                 repository=repo.full_name,
                 branch=effective_branch,
                 path=normalized_path,
                 commit_sha=commit_sha,
-                source_id=source_id,
+                source_id=observed_source_id,
                 source_version_id=observed_active_id,
                 documents=[],
             )
@@ -143,6 +144,13 @@ async def ingest_github_repository(
         await github.close()
 
     try:
+        source = await get_or_create_doc_source(
+            session,
+            repository=repo.full_name,
+            branch=effective_branch,
+            path=normalized_path,
+        )
+        source_id = source.id
         locked_source = await get_doc_source_for_update(session, source_id=source_id)
         if locked_source is None:
             raise RuntimeError("Document source no longer exists.")
