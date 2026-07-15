@@ -58,7 +58,12 @@ async def run_query(
     chunks = await retrieve_chunks(session, **retrieval_options)
     chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
     chunks = filter_prompt_injection_chunks(chunks)
-    answer = build_extractive_answer(question, chunks)
+    extractive_answer = build_extractive_answer(question, chunks)
+    answer = " ".join(sentence.text for sentence in extractive_answer.sentences)
+    if not answer:
+        answer = "I could not find indexed documentation that answers this question."
+    cited_chunk_ids = {sentence.chunk_id for sentence in extractive_answer.sentences}
+    cited_chunks = [chunk for chunk in chunks if chunk.id in cited_chunk_ids]
     chunk_ids = [chunk.id for chunk in chunks]
     latency_ms = round((time.perf_counter() - started_at) * 1000)
     query_log = await log_query(
@@ -73,7 +78,7 @@ async def run_query(
     return QueryExecutionResult(
         query_id=query_log.id,
         answer=answer,
-        chunks=chunks,
+        chunks=cited_chunks,
         retrieved_chunk_ids=chunk_ids,
         latency_ms=query_log.latency_ms,
         retrieved_chunk_count=query_log.retrieved_chunk_count,

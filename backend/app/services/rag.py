@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 
 from app.services.repositories import RetrievedChunk
 
@@ -14,6 +15,17 @@ _PROMPT_INJECTION_PATTERNS = [
         r"\bforget\s+(all\s+)?(previous|prior|above)\s+instructions\b",
     )
 ]
+
+
+@dataclass(frozen=True)
+class CitedSentence:
+    text: str
+    chunk_id: int
+
+
+@dataclass(frozen=True)
+class ExtractiveAnswer:
+    sentences: list[CitedSentence]
 
 
 def filter_chunks_by_min_score(
@@ -34,12 +46,13 @@ def filter_prompt_injection_chunks(chunks: list[RetrievedChunk]) -> list[Retriev
     return [chunk for chunk in chunks if not _contains_prompt_injection(chunk.text)]
 
 
-def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> str:
+def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> ExtractiveAnswer:
     if not chunks:
-        return "I could not find indexed documentation that answers this question."
+        return ExtractiveAnswer(sentences=[])
 
     query_terms = {term.lower() for term in _WORD_RE.findall(question)}
-    selected: list[str] = []
+    selected: list[CitedSentence] = []
+    selected_keys: set[tuple[str, int]] = set()
 
     for chunk in chunks:
         sentences = [part.strip() for part in _SENTENCE_RE.split(chunk.text) if part.strip()]
@@ -49,17 +62,19 @@ def build_extractive_answer(question: str, chunks: list[RetrievedChunk]) -> str:
             reverse=True,
         )
         for sentence in ranked[:2]:
-            if sentence not in selected and _term_overlap(sentence, query_terms) > 0:
-                selected.append(sentence)
+            key = (sentence, chunk.id)
+            if key not in selected_keys and _term_overlap(sentence, query_terms) > 0:
+                selected.append(CitedSentence(text=sentence, chunk_id=chunk.id))
+                selected_keys.add(key)
+                if len(selected) == 4:
+                    break
         if len(selected) >= 4:
             break
 
     if not selected:
-        selected = [chunks[0].text[:700].strip()]
+        selected = [CitedSentence(text=chunks[0].text[:700].strip(), chunk_id=chunks[0].id)]
 
-    answer = " ".join(selected)
-    citations = ", ".join(f"[{index + 1}]" for index, _chunk in enumerate(chunks[:3]))
-    return f"{answer}\n\nSources: {citations}"
+    return ExtractiveAnswer(sentences=selected)
 
 
 def _term_overlap(text: str, query_terms: set[str]) -> int:
