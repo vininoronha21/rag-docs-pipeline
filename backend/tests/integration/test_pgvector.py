@@ -4,12 +4,34 @@ from sqlalchemy import Connection, text
 
 @pytest.mark.integration
 def test_cosine_query_ranks_identical_vector_first(sync_connection: Connection) -> None:
+    transaction = sync_connection.begin_nested()
+    source_id = sync_connection.execute(
+        text(
+            "INSERT INTO doc_sources "
+            "(source_type, source_config, enabled, repository, branch, path, language) "
+            "VALUES ('github', '{}', true, 'integration/project', 'main', "
+            "'docs', 'pt-BR') RETURNING id"
+        )
+    ).scalar_one()
+    version_id = sync_connection.execute(
+        text(
+            "INSERT INTO source_versions "
+            "(source_id, commit_sha, embedding_provider, embedding_model, "
+            "embedding_dimensions, document_count, chunk_count) "
+            "VALUES (:source_id, :commit_sha, 'local', 'hash', 1536, 1, 2) "
+            "RETURNING id"
+        ),
+        {"source_id": source_id, "commit_sha": "e" * 40},
+    ).scalar_one()
     document_id = sync_connection.execute(
         text(
-            "INSERT INTO documents (source, source_url, title, content) "
-            "VALUES (:source, :source_url, :title, :content) RETURNING id"
+            "INSERT INTO documents "
+            "(source_version_id, repository_path, source, source_url, title, content) "
+            "VALUES (:version_id, 'docs/integration.md', :source, :source_url, "
+            ":title, :content) RETURNING id"
         ),
         {
+            "version_id": version_id,
             "source": "integration-test",
             "source_url": "https://example.com/integration-test",
             "title": "Integration test",
@@ -42,7 +64,8 @@ def test_cosine_query_ranks_identical_vector_first(sync_connection: Connection) 
         ),
         {"query": identical_vector},
     ).all()
-    sync_connection.commit()
 
     assert results[0].chunk_text == "identical"
     assert results[0].distance == pytest.approx(0.0)
+    transaction.rollback()
+    sync_connection.rollback()

@@ -349,7 +349,9 @@ export function ChatShell() {
                               />
                             </span>
                             <span className="mt-2 block text-slate-500">
-                              score {citation.score.toFixed(3)}
+                              {citation.score === null
+                                ? "text match"
+                                : `score ${citation.score.toFixed(3)}`}
                             </span>
                           </a>
                         );

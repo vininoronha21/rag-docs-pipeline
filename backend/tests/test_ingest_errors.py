@@ -1,15 +1,127 @@
 import httpx
 import pytest
-from fastapi import HTTPException, status
+from fastapi import FastAPI, HTTPException, status
+from fastapi.testclient import TestClient
 
 from app.api import routes
-from app.schemas import GithubIngestRequest
+from app.schemas import GithubIngestRequest, IngestResponse
 from app.services.embeddings import EmbeddingProviderError
 from app.services.github import GithubClientError
+from app.services.pipeline import (
+    GithubIngestionResult,
+    SourceSynchronizationConflict,
+)
 
 
 def ingest_payload() -> GithubIngestRequest:
-    return GithubIngestRequest(repo_url="https://github.com/example/project", max_files=1)
+    return GithubIngestRequest(
+        repo_url="https://github.com/example/project",
+        path="docs",
+        max_files=1,
+    )
+
+
+@pytest.mark.parametrize("payload", [{}, {"path": ""}])
+def test_ingest_schema_requires_non_empty_path(payload: dict[str, str]) -> None:
+    app = FastAPI()
+
+    @app.post("/ingest")
+    async def ingest(request: GithubIngestRequest) -> GithubIngestRequest:
+        return request
+
+    response = TestClient(app).post(
+        "/ingest",
+        json={"repo_url": "https://github.com/example/project", **payload},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_ingest_response_serializes_no_op_version() -> None:
+    response = IngestResponse(
+        status="no_op",
+        repository="example/project",
+        branch="main",
+        path="docs",
+        commit_sha="a" * 40,
+        source_id=3,
+        source_version_id=7,
+        documents=[],
+        total_chunks=0,
+    )
+
+    assert response.model_dump() == {
+        "status": "no_op",
+        "repository": "example/project",
+        "branch": "main",
+        "path": "docs",
+        "commit_sha": "a" * 40,
+        "source_id": 3,
+        "source_version_id": 7,
+        "documents": [],
+        "total_chunks": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ingest_github_returns_complete_versioned_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_ingest_github_repository(
+        *args: object, **kwargs: object
+    ) -> GithubIngestionResult:
+        return GithubIngestionResult(
+            status="no_op",
+            repository="example/project",
+            branch="main",
+            path="docs",
+            commit_sha="a" * 40,
+            source_id=3,
+            source_version_id=7,
+            documents=[],
+        )
+
+    monkeypatch.setattr(routes, "ingest_github_repository", fake_ingest_github_repository)
+
+    response = await routes.ingest_github(
+        ingest_payload(),
+        session=object(),
+        settings=object(),
+        embeddings=object(),
+    )
+
+    assert response.model_dump() == {
+        "status": "no_op",
+        "repository": "example/project",
+        "branch": "main",
+        "path": "docs",
+        "commit_sha": "a" * 40,
+        "source_id": 3,
+        "source_version_id": 7,
+        "documents": [],
+        "total_chunks": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ingest_github_returns_conflict_for_competing_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_ingest_github_repository(*args: object, **kwargs: object) -> None:
+        raise SourceSynchronizationConflict("internal synchronization details")
+
+    monkeypatch.setattr(routes, "ingest_github_repository", fake_ingest_github_repository)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.ingest_github(
+            ingest_payload(),
+            session=object(),
+            settings=object(),
+            embeddings=object(),
+        )
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.detail == "Source changed during synchronization. Retry the request."
 
 
 @pytest.mark.asyncio

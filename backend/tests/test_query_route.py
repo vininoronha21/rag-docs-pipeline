@@ -1,36 +1,20 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import FastAPI, HTTPException, status
+from fastapi.testclient import TestClient
 
 from app.api import routes
 from app.core.config import Settings
 from app.schemas import QueryRequest
 from app.services.embeddings import EmbeddingProviderError
-from app.services.querying import QueryExecutionResult
-from app.services.repositories import RetrievedChunk
-
-
-def make_chunk(chunk_id: int, score: float, text: str) -> RetrievedChunk:
-    return RetrievedChunk(
-        id=chunk_id,
-        document_id=10,
-        text=text,
-        chunk_index=0,
-        metadata={"source_path": "docs/index.md", "section": "Run"},
-        title="Project docs",
-        source_url="https://github.com/example/project/blob/main/docs/index.md",
-        source="github",
-        score=score,
-    )
+from app.services.querying import Evidence, QueryExecutionMetrics, QueryExecutionResult
+from app.services.rag import CitedSentence, ExtractiveAnswer
 
 
 def test_get_embedding_provider_returns_server_error_for_invalid_configuration() -> None:
-    settings = Settings(
-        embedding_provider="openai",
-        openai_api_key=None,
-        _env_file=None,
-    )
+    settings = Settings(embedding_provider="openai", openai_api_key=None, _env_file=None)
 
     with pytest.raises(HTTPException) as exc_info:
         routes.get_embedding_provider(settings=settings)
@@ -41,47 +25,124 @@ def test_get_embedding_provider_returns_server_error_for_invalid_configuration()
 
 
 @pytest.mark.asyncio
-async def test_query_route_retrieves_filters_answers_and_logs(
+async def test_query_route_maps_structured_answer_and_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = object()
-    embeddings = object()
-    settings = SimpleNamespace(retrieval_min_score=0.1)
+    event_id = uuid4()
 
     async def fake_run_query(*args: object, **kwargs: object) -> QueryExecutionResult:
-        assert args == (session,)
-        assert kwargs == {
-            "question": "How do I run FastAPI?",
-            "top_k": 5,
-            "source": "github",
-            "settings": settings,
-            "embeddings": embeddings,
-        }
-        chunk = make_chunk(3, 0.8, "FastAPI runs with Uvicorn from the command line.")
         return QueryExecutionResult(
-            query_id=42,
-            answer="FastAPI runs with Uvicorn from the command line.",
-            chunks=[chunk],
-            retrieved_chunk_ids=[3],
-            latency_ms=12,
-            retrieved_chunk_count=1,
+            event_id=event_id,
+            state="answered",
+            answer=ExtractiveAnswer(
+                sentences=[CitedSentence(text="FastAPI runs with Uvicorn.", chunk_id=3)]
+            ),
+            evidence=[
+                Evidence(
+                    citation_id="citation-1",
+                    supported_text="FastAPI runs with Uvicorn.",
+                    excerpt="FastAPI runs with Uvicorn from the command line.",
+                    title="Project docs",
+                    repository_path="docs/index.md",
+                    section="Run",
+                    commit_sha="a" * 40,
+                    source_url=f"https://github.com/example/project/blob/{'a' * 40}/docs/index.md",
+                    vector_score=0.8,
+                    text_score=0.4,
+                    fused_score=0.02,
+                    chunk_id=3,
+                )
+            ],
+            metrics=QueryExecutionMetrics(
+                latency_ms=12,
+                retrieved_chunk_count=1,
+                top_fused_score=0.02,
+                score_gap=None,
+            ),
         )
 
     monkeypatch.setattr(routes, "run_query", fake_run_query)
 
     response = await routes.query_docs(
         QueryRequest(question="How do I run FastAPI?", top_k=5, source="github"),
-        session=session,
-        settings=settings,
-        embeddings=embeddings,
+        session=object(),
+        settings=object(),
+        embeddings=object(),
     )
 
-    assert response.query_id == 42
-    assert response.retrieved_chunk_ids == [3]
-    assert response.latency_ms == 12
-    assert response.retrieved_chunk_count == 1
-    assert response.citations[0].chunk_id == 3
-    assert "FastAPI runs with Uvicorn" in response.answer
+    assert response.event_id == event_id
+    assert response.state == "answered"
+    assert response.answer is not None
+    assert response.answer.sentences[0].text == "FastAPI runs with Uvicorn."
+    assert response.answer.sentences[0].citation_id == "citation-1"
+    assert response.evidence[0].citation_id == "citation-1"
+    assert response.evidence[0].repository_path == "docs/index.md"
+    assert response.metrics.retrieved_chunk_count == 1
+    payload = response.model_dump(mode="json")
+    assert "chunk_id" not in payload["evidence"][0]
+    assert "retrieved_chunk_ids" not in payload
+    assert "query_id" not in payload
+
+
+def test_query_history_route_is_absent() -> None:
+    paths = {(route.path, method) for route in routes.router.routes for method in route.methods}
+
+    assert ("/queries", "GET") not in paths
+    assert ("/query-events/{event_id}/feedback", "PATCH") in paths
+
+
+def test_query_route_returns_insufficient_evidence_as_http_200(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_id = uuid4()
+
+    async def fake_run_query(*args: object, **kwargs: object) -> QueryExecutionResult:
+        return QueryExecutionResult(
+            event_id=event_id,
+            state="insufficient_evidence",
+            answer=None,
+            evidence=[
+                Evidence(
+                    citation_id=None,
+                    supported_text=None,
+                    excerpt="Closest available documentation.",
+                    title="Project docs",
+                    repository_path="docs/index.md",
+                    section="Overview",
+                    commit_sha="a" * 40,
+                    source_url=f"https://github.com/example/project/blob/{'a' * 40}/docs/index.md",
+                    vector_score=0.9,
+                    text_score=None,
+                    fused_score=0.005,
+                    chunk_id=9,
+                )
+            ],
+            metrics=QueryExecutionMetrics(
+                latency_ms=8,
+                retrieved_chunk_count=1,
+                top_fused_score=0.005,
+                score_gap=None,
+            ),
+        )
+
+    monkeypatch.setattr(routes, "run_query", fake_run_query)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.get_session] = lambda: object()
+    app.dependency_overrides[routes.get_settings] = lambda: object()
+    app.dependency_overrides[routes.get_embedding_provider] = lambda: object()
+
+    response = TestClient(app).post(
+        "/api/query",
+        json={"question": "Unknown topic", "top_k": 5},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    payload = response.json()
+    assert payload["state"] == "insufficient_evidence"
+    assert payload["answer"] is None
+    assert payload["evidence"][0]["citation_id"] is None
+    assert payload["evidence"][0]["excerpt"] == "Closest available documentation."
 
 
 @pytest.mark.asyncio
@@ -102,7 +163,31 @@ async def test_query_route_returns_bad_gateway_for_embedding_provider_error(
         )
 
     assert exc_info.value.status_code == status.HTTP_502_BAD_GATEWAY
-    assert "Could not reach embedding provider" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_feedback_route_uses_uuid_event_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    event_id = uuid4()
+    event = SimpleNamespace(id=event_id, feedback=1)
+
+    async def fake_update(*args: object, **kwargs: object) -> object:
+        assert kwargs == {"event_id": event_id, "feedback": 1}
+        return event
+
+    class AsyncSession:
+        async def commit(self) -> None:
+            pass
+
+    monkeypatch.setattr(routes, "update_query_event_feedback", fake_update)
+
+    response = await routes.record_query_feedback(
+        event_id,
+        routes.QueryFeedbackRequest(feedback=1),
+        session=AsyncSession(),
+    )
+
+    assert response.event_id == event_id
+    assert response.feedback == 1
 
 
 @pytest.mark.asyncio

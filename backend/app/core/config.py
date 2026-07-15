@@ -57,6 +57,24 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum pgvector cosine similarity score required before answering.",
     )
+    retrieval_min_fused_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum leading reciprocal-rank-fusion score required to answer.",
+    )
+    retrieval_min_score_gap: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum fused-score gap from the second result when one exists.",
+    )
+    retrieval_candidate_k: int = Field(
+        default=50,
+        gt=12,
+        description="Candidates collected per retrieval arm; must exceed the maximum top_k.",
+    )
+    retrieval_rrf_k: int = Field(default=60, gt=0)
+    retrieval_vector_weight: float = Field(default=0.7, gt=0)
+    retrieval_text_weight: float = Field(default=0.3, gt=0)
 
     allowed_origins: list[str] = [
         "http://localhost:3000",
