@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.db.models import DocSource, Document, SourceVersion
 
@@ -51,6 +52,9 @@ def test_orm_metadata_matches_source_version_ownership() -> None:
     assert active_version_fk.ondelete == "SET NULL"
     assert active_version_fk.use_alter is True
     assert next(iter(Document.source_version_id.foreign_keys)).ondelete == "CASCADE"
+    assert "doc_source_id" not in Document.__table__.columns
+    assert not hasattr(Document, "doc_source")
+    assert not hasattr(DocSource, "documents")
     assert SourceVersion.source.property.back_populates == "versions"
     assert SourceVersion.documents.property.back_populates == "source_version"
 
@@ -85,6 +89,105 @@ def test_source_version_schema_constraints(sync_connection: Connection) -> None:
         "ck_source_versions_chunk_count_nonnegative": "CHECK ((chunk_count >= 0))",
         "uq_documents_version_path": "UNIQUE (source_version_id, repository_path)",
     }
+    sync_connection.rollback()
+
+
+@pytest.mark.integration
+def test_head_removes_legacy_document_source_ownership(sync_connection: Connection) -> None:
+    column_exists = sync_connection.execute(
+        text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = 'documents' AND column_name = 'doc_source_id'"
+            ")"
+        )
+    ).scalar_one()
+    index_exists = sync_connection.execute(
+        text("SELECT to_regclass('ix_documents_doc_source_id')")
+    ).scalar_one()
+    constraint_exists = sync_connection.execute(
+        text(
+            "SELECT EXISTS (SELECT 1 FROM pg_constraint "
+            "WHERE conname = 'fk_documents_doc_source_id_doc_sources')"
+        )
+    ).scalar_one()
+
+    assert column_exists is False
+    assert index_exists is None
+    assert constraint_exists is False
+    sync_connection.rollback()
+
+
+@pytest.mark.integration
+def test_orm_persists_and_deletes_active_source_version_graph(
+    sync_connection: Connection,
+) -> None:
+    with Session(bind=sync_connection, expire_on_commit=False) as session:
+        source = DocSource(
+            source_type="github",
+            source_config={"repository": "orm/project"},
+            repository="orm/project",
+            branch="main",
+            path="docs",
+            language="pt-BR",
+            enabled=True,
+        )
+        version = SourceVersion(
+            source=source,
+            commit_sha="f" * 40,
+            embedding_provider="local",
+            embedding_model="hash",
+            embedding_dimensions=1536,
+            document_count=1,
+            chunk_count=0,
+        )
+        document = Document(
+            source_version=version,
+            repository_path="docs/orm.md",
+            source="github",
+            source_url="https://example.test/orm",
+            content="ORM cycle",
+        )
+        source.active_version = version
+        session.add_all([source, document])
+        session.flush()
+
+        assert source.id is not None
+        assert version.id is not None
+        assert document.id is not None
+        assert source.active_version_id == version.id
+        assert document.source_version_id == version.id
+        session.commit()
+
+        source_id = source.id
+        version_id = version.id
+        document_id = document.id
+
+        session.delete(source)
+        session.commit()
+
+    assert (
+        sync_connection.execute(
+            text("SELECT count(*) FROM doc_sources WHERE id = :source_id"),
+            {"source_id": source_id},
+        ).scalar_one()
+        == 0
+    )
+    assert (
+        sync_connection.execute(
+            text("SELECT count(*) FROM source_versions WHERE id = :version_id"),
+            {"version_id": version_id},
+        ).scalar_one()
+        == 0
+    )
+    assert (
+        sync_connection.execute(
+            text("SELECT count(*) FROM documents WHERE id = :document_id"),
+            {"document_id": document_id},
+        ).scalar_one()
+        == 0
+    )
     sync_connection.rollback()
 
 

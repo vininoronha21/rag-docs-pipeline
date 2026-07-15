@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -42,10 +42,10 @@ class Document(Base, TimestampMixin):
         UniqueConstraint("source_version_id", "repository_path", name="uq_documents_version_path"),
     )
 
+    # Temporary non-persisted input for the pre-version repository API removed in Task 3.
+    doc_source_id: ClassVar[int | None] = None
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    doc_source_id: Mapped[int | None] = mapped_column(
-        ForeignKey("doc_sources.id", ondelete="SET NULL"), nullable=True, index=True
-    )
     source_version_id: Mapped[int] = mapped_column(
         ForeignKey(
             "source_versions.id",
@@ -67,7 +67,6 @@ class Document(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    doc_source: Mapped["DocSource | None"] = relationship(back_populates="documents")
     source_version: Mapped["SourceVersion"] = relationship(back_populates="documents")
 
 
@@ -138,7 +137,6 @@ class DocSource(Base):
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    documents: Mapped[list[Document]] = relationship(back_populates="doc_source")
     versions: Mapped[list["SourceVersion"]] = relationship(
         back_populates="source",
         foreign_keys="SourceVersion.source_id",

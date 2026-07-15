@@ -22,6 +22,10 @@ def upgrade() -> None:
     op.execute("DELETE FROM documents")
     op.execute("DELETE FROM doc_sources")
 
+    op.drop_constraint("fk_documents_doc_source_id_doc_sources", "documents", type_="foreignkey")
+    op.drop_index("ix_documents_doc_source_id", table_name="documents")
+    op.drop_column("documents", "doc_source_id")
+
     op.add_column("doc_sources", sa.Column("repository", sa.String(length=255), nullable=False))
     op.add_column("doc_sources", sa.Column("branch", sa.String(length=255), nullable=False))
     op.add_column("doc_sources", sa.Column("path", sa.Text(), nullable=False))
@@ -120,6 +124,26 @@ def downgrade() -> None:
     op.drop_column("documents", "repository_path")
     op.drop_column("documents", "source_version_id")
     op.create_unique_constraint("documents_source_url_key", "documents", ["source_url"])
+    op.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_source_id INTEGER")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_documents_doc_source_id ON documents (doc_source_id)")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_documents_doc_source_id_doc_sources'
+                  AND conrelid = 'documents'::regclass
+            ) THEN
+                ALTER TABLE documents
+                ADD CONSTRAINT fk_documents_doc_source_id_doc_sources
+                FOREIGN KEY (doc_source_id) REFERENCES doc_sources (id)
+                ON DELETE SET NULL;
+            END IF;
+        END
+        $$
+        """
+    )
 
     op.drop_constraint(
         "fk_doc_sources_active_version_id_source_versions",

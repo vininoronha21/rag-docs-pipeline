@@ -100,11 +100,32 @@ def test_source_version_downgrade_destroys_documents_and_restores_legacy_unique_
         source_versions_table = sync_connection.execute(
             text("SELECT to_regclass('source_versions')")
         ).scalar_one()
+        legacy_column = sync_connection.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'documents' AND column_name = 'doc_source_id'"
+            )
+        ).scalar_one()
+        legacy_index = sync_connection.execute(
+            text("SELECT to_regclass('ix_documents_doc_source_id')")
+        ).scalar_one()
+        legacy_fk = sync_connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'fk_documents_doc_source_id_doc_sources'"
+            )
+        ).scalar_one()
         sync_connection.rollback()
 
         assert document_count == 0
         assert source_url_constraints == ["UNIQUE (source_url)"]
         assert source_versions_table is None
+        assert legacy_column == "YES"
+        assert legacy_index == "ix_documents_doc_source_id"
+        assert legacy_fk == (
+            "FOREIGN KEY (doc_source_id) REFERENCES doc_sources(id) ON DELETE SET NULL"
+        )
     finally:
         sync_connection.rollback()
         try:
