@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -19,7 +19,7 @@ class GithubIngestRequest(BaseModel):
         default=None,
         description="Branch or tag. Defaults to repo default branch.",
     )
-    path: str = Field(default="", description="Optional folder path to ingest from.")
+    path: str = Field(min_length=1, description="Repository folder path to ingest from.")
     max_files: int = Field(default=50, ge=1, le=500)
 
 
@@ -30,7 +30,13 @@ class IngestedDocument(BaseModel):
 
 
 class IngestResponse(BaseModel):
+    status: Literal["synchronized", "no_op"]
     repository: str
+    branch: str
+    path: str
+    commit_sha: str
+    source_id: int
+    source_version_id: int
     documents: list[IngestedDocument]
     total_chunks: int
 

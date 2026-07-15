@@ -26,7 +26,7 @@ from rich.table import Table
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
-from app.db.models import DocSource, Document, DocumentChunk, QueryLog
+from app.db.models import DocSource, Document, DocumentChunk, QueryLog, SourceVersion
 from app.db.session import AsyncSessionLocal
 from app.services.embeddings import build_embedding_provider
 from app.services.pipeline import ingest_github_repository
@@ -39,6 +39,8 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 VERIFY_REPO_URL = "https://github.com/tiangolo/fastapi"
+VERIFY_REPOSITORY = "tiangolo/fastapi"
+VERIFY_PATH = "docs/en/docs"
 VERIFY_MAX_FILES = 5
 VERIFY_QUESTION = "How do I run FastAPI locally?"
 VERIFY_SOURCE = "github"
@@ -98,7 +100,14 @@ async def verify_database_connection() -> bool:
 
 async def verify_tables_exist() -> bool:
     """Confirm all expected tables exist (migrations applied)."""
-    expected = {"documents", "document_chunks", "doc_sources", "queries", "alembic_version"}
+    expected = {
+        "documents",
+        "document_chunks",
+        "doc_sources",
+        "source_versions",
+        "queries",
+        "alembic_version",
+    }
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -117,7 +126,7 @@ async def verify_tables_exist() -> bool:
 
 
 async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]:
-    """Ingest a small real GitHub repository and return (ok, doc_count, chunk_count)."""
+    """Ingest a small repository snapshot and verify a repeated sync is a no-op."""
     try:
         async with AsyncSessionLocal() as session:
             result = await ingest_github_repository(
@@ -126,11 +135,20 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
                 embeddings=embeddings,
                 repo_url=VERIFY_REPO_URL,
                 branch=None,
-                path="",
+                path=VERIFY_PATH,
                 max_files=VERIFY_MAX_FILES,
             )
-        doc_count = len(result.documents)
-        chunk_count = sum(d.chunk_count for d in result.documents)
+        if result.status == "synchronized":
+            doc_count = len(result.documents)
+            chunk_count = sum(d.chunk_count for d in result.documents)
+        else:
+            async with AsyncSessionLocal() as session:
+                active_version = await session.get(SourceVersion, result.source_version_id)
+            if active_version is None:
+                _fail("Ingest active version", f"version_id={result.source_version_id} not found")
+                return False, 0, 0
+            doc_count = active_version.document_count
+            chunk_count = active_version.chunk_count
         if doc_count < VERIFY_MIN_DOCS:
             _fail(
                 "Ingest documents",
@@ -145,7 +163,30 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
             return False, doc_count, chunk_count
         _pass(
             "Ingest documents and chunks",
-            f"{doc_count} documents, {chunk_count} chunks from {result.repository}",
+            f"{doc_count} documents, {chunk_count} chunks at commit {result.commit_sha}",
+        )
+
+        async with AsyncSessionLocal() as session:
+            repeated = await ingest_github_repository(
+                session,
+                settings=settings,
+                embeddings=embeddings,
+                repo_url=VERIFY_REPO_URL,
+                branch=None,
+                path=VERIFY_PATH,
+                max_files=VERIFY_MAX_FILES,
+            )
+        if (
+            repeated.status != "no_op"
+            or repeated.source_id != result.source_id
+            or repeated.source_version_id != result.source_version_id
+            or repeated.commit_sha != result.commit_sha
+        ):
+            _fail("Repeated synchronization is a no-op")
+            return False, doc_count, chunk_count
+        _pass(
+            "Repeated synchronization is a no-op",
+            f"source={repeated.source_id}, version={repeated.source_version_id}",
         )
         return True, doc_count, chunk_count
     except Exception as exc:  # noqa: BLE001
@@ -167,6 +208,9 @@ async def verify_persistence() -> tuple[bool, dict[str, int]]:
             counts["doc_sources"] = (
                 await session.execute(select(func.count()).select_from(DocSource))
             ).scalar_one()
+            counts["source_versions"] = (
+                await session.execute(select(func.count()).select_from(SourceVersion))
+            ).scalar_one()
             counts["queries"] = (
                 await session.execute(select(func.count()).select_from(QueryLog))
             ).scalar_one()
@@ -175,6 +219,7 @@ async def verify_persistence() -> tuple[bool, dict[str, int]]:
             "documents": VERIFY_MIN_DOCS,
             "document_chunks": VERIFY_MIN_CHUNKS,
             "doc_sources": VERIFY_MIN_SOURCES,
+            "source_versions": 1,
         }
         ok = True
         for table, minimum in checks.items():
@@ -184,22 +229,36 @@ async def verify_persistence() -> tuple[bool, dict[str, int]]:
                 _fail(f"Persistence: {table}", f"expected >= {minimum}, got {counts[table]}")
                 ok = False
 
-        # Every document must be owned by a source version.
         async with AsyncSessionLocal() as session:
-            linked = (
+            owned_documents = (
                 await session.execute(
                     select(func.count())
                     .select_from(Document)
-                    .where(Document.source_version_id.is_not(None))
+                    .join(SourceVersion, Document.source_version_id == SourceVersion.id)
+                    .join(DocSource, SourceVersion.source_id == DocSource.id)
                 )
             ).scalar_one()
-        if linked >= VERIFY_MIN_DOCS:
-            _pass("Documents linked to source versions", f"{linked} linked")
+            active_chunks = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .join(Document, DocumentChunk.document_id == Document.id)
+                    .join(DocSource, DocSource.active_version_id == Document.source_version_id)
+                    .where(DocSource.enabled.is_(True))
+                )
+            ).scalar_one()
+        if owned_documents == counts["documents"]:
+            _pass("Document ownership chain", f"{owned_documents} documents owned")
         else:
             _fail(
-                "Documents linked to source versions",
-                f"expected >= {VERIFY_MIN_DOCS}, got {linked}",
+                "Document ownership chain",
+                f"expected {counts['documents']}, got {owned_documents}",
             )
+            ok = False
+        if active_chunks >= VERIFY_MIN_CHUNKS:
+            _pass("Active corpus", f"{active_chunks} chunks")
+        else:
+            _fail("Active corpus", f"expected >= {VERIFY_MIN_CHUNKS}, got {active_chunks}")
             ok = False
 
         return ok, counts
@@ -257,38 +316,47 @@ async def verify_query(settings: Any, embeddings: Any) -> bool:
 
 
 async def verify_source_disable(settings: Any, embeddings: Any) -> bool:
-    """Disable a source, confirm retrieval returns 0 chunks, then re-enable."""
+    """Disable the verification source, test retrieval, then restore its prior state."""
+    source_id: int | None = None
+    previous_enabled: bool | None = None
     try:
         async with AsyncSessionLocal() as session:
             source = (
                 await session.execute(
-                    select(DocSource).where(DocSource.source_type == VERIFY_SOURCE).limit(1)
+                    select(DocSource)
+                    .where(
+                        DocSource.source_type == VERIFY_SOURCE,
+                        DocSource.repository == VERIFY_REPOSITORY,
+                        DocSource.path == VERIFY_PATH,
+                    )
+                    .limit(1)
                 )
             ).scalar_one_or_none()
             if source is None:
                 _fail("Source disable: no source found to disable")
                 return False
             source_id = source.id
+            previous_enabled = source.enabled
             source.enabled = False
             await session.commit()
 
-        async with AsyncSessionLocal() as session:
-            result = await run_query(
-                session,
-                question=VERIFY_QUESTION,
-                top_k=5,
-                source=VERIFY_SOURCE,
-                settings=settings,
-                embeddings=embeddings,
-            )
-        chunks_when_disabled = result.retrieved_chunk_count
-
-        # Re-enable immediately
-        async with AsyncSessionLocal() as session:
-            source = await session.get(DocSource, source_id)
-            if source is not None:
-                source.enabled = True
-                await session.commit()
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await run_query(
+                    session,
+                    question=VERIFY_QUESTION,
+                    top_k=5,
+                    source=VERIFY_SOURCE,
+                    settings=settings,
+                    embeddings=embeddings,
+                )
+            chunks_when_disabled = result.retrieved_chunk_count
+        finally:
+            async with AsyncSessionLocal() as session:
+                source = await session.get(DocSource, source_id)
+                if source is not None:
+                    source.enabled = previous_enabled
+                    await session.commit()
 
         if chunks_when_disabled == 0:
             _pass("Disabled source returns 0 chunks")
@@ -299,7 +367,7 @@ async def verify_source_disable(settings: Any, embeddings: Any) -> bool:
             )
             return False
 
-        _pass("Source re-enabled after disable test")
+        _pass("Source state restored after disable test")
         return True
 
     except Exception as exc:  # noqa: BLE001

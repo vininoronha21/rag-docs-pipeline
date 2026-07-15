@@ -17,11 +17,13 @@ console = Console()
 @cli.command()
 def ingest_github(
     repo_url: str,
+    path: str,
     branch: Optional[str] = None,  # noqa: UP007 - Typer 0.12 needs typing.Optional.
-    path: str = "",
     max_files: int = 50,
 ) -> None:
     """Ingest Markdown documentation from a GitHub repository."""
+    if not path:
+        raise typer.BadParameter("Path must not be empty.", param_hint="path")
 
     async def run() -> None:
         settings = get_settings()
@@ -36,7 +38,14 @@ def ingest_github(
                 path=path,
                 max_files=max_files,
             )
-        console.print(f"Ingested {len(result.documents)} documents from {result.repository}")
+        if result.status == "no_op":
+            console.print(f"No changes: {result.repository} is already synchronized")
+        else:
+            console.print(
+                f"Synchronized {len(result.documents)} documents from {result.repository}"
+            )
+        console.print(f"Commit: {result.commit_sha}")
+        console.print(f"Version: {result.source_version_id}")
         console.print(f"Total chunks: {sum(document.chunk_count for document in result.documents)}")
 
     asyncio.run(run())

@@ -27,7 +27,7 @@ from app.services.embeddings import (
     build_embedding_provider,
 )
 from app.services.github import GithubClientError
-from app.services.pipeline import ingest_github_repository
+from app.services.pipeline import SourceSynchronizationConflict, ingest_github_repository
 from app.services.querying import run_query
 from app.services.repositories import (
     get_analytics_summary,
@@ -89,6 +89,11 @@ async def ingest_github(
             path=payload.path,
             max_files=payload.max_files,
         )
+    except SourceSynchronizationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source changed during synchronization. Retry the request.",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -115,7 +120,13 @@ async def ingest_github(
         for document in result.documents
     ]
     return IngestResponse(
+        status=result.status,
         repository=result.repository,
+        branch=result.branch,
+        path=result.path,
+        commit_sha=result.commit_sha,
+        source_id=result.source_id,
+        source_version_id=result.source_version_id,
         documents=documents,
         total_chunks=sum(document.chunk_count for document in documents),
     )
