@@ -219,6 +219,7 @@ async def verify_persistence(
                     (source.repository == result.repository, "Source repository matches result"),
                     (source.branch == result.branch, "Source branch matches result"),
                     (source.path == result.path, "Source path matches result"),
+                    (source.enabled is True, "Target source is enabled"),
                     (
                         source.active_version_id == result.source_version_id,
                         "Result version is active for source",
@@ -281,7 +282,11 @@ async def verify_persistence(
         return False, counts
 
 
-async def verify_query(settings: Any, embeddings: Any) -> bool:
+async def verify_query(
+    settings: Any,
+    embeddings: Any,
+    target: GithubIngestionResult,
+) -> bool:
     """Run a query and confirm an answer and citations are returned."""
     try:
         async with AsyncSessionLocal() as session:
@@ -292,6 +297,7 @@ async def verify_query(settings: Any, embeddings: Any) -> bool:
                 source=VERIFY_SOURCE,
                 settings=settings,
                 embeddings=embeddings,
+                source_id=target.source_id,
             )
 
         has_answer = bool(result.answer.strip())
@@ -458,7 +464,9 @@ async def main() -> int:
     # Step 5: query
     console.print()
     _info(f"Running query: {VERIFY_QUESTION!r} …")
-    results["Query returns answer with citations"] = await verify_query(settings, embeddings)
+    results["Query returns answer with citations"] = (
+        await verify_query(settings, embeddings, target) if target is not None else False
+    )
 
     # Step 6: source disable
     console.print()

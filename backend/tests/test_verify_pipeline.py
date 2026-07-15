@@ -120,6 +120,19 @@ async def test_verify_persistence_validates_only_ingestion_result_target(
 
 
 @pytest.mark.asyncio
+async def test_verify_persistence_rejects_disabled_target_with_other_enabled_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = target_session(enabled=False)
+    session.unrelated_source = SimpleNamespace(id=99, source_type="github", enabled=True)
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+
+    ok, _counts = await verify_pipeline.verify_persistence(ingestion_result())
+
+    assert ok is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("invalid_field", "invalid_value"),
     [
@@ -214,6 +227,68 @@ async def test_verify_ingest_rejects_no_op_count_drift(monkeypatch: pytest.Monke
 
     assert ok is False
     assert target is None
+
+
+@pytest.mark.asyncio
+async def test_verify_query_cannot_use_another_enabled_github_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_ids: list[int | None] = []
+
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        source_id = kwargs.get("source_id")
+        source_ids.append(source_id)
+        if source_id == 3:
+            return SimpleNamespace(
+                answer="",
+                retrieved_chunk_count=0,
+                latency_ms=1,
+                query_id=10,
+            )
+        return SimpleNamespace(
+            answer="Answer from unrelated enabled GitHub source",
+            retrieved_chunk_count=1,
+            latency_ms=1,
+            query_id=11,
+        )
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    ok = await verify_pipeline.verify_query(
+        object(),
+        object(),
+        ingestion_result(),
+    )
+
+    assert ok is False
+    assert source_ids == [3]
+
+
+@pytest.mark.asyncio
+async def test_verify_query_proves_positive_retrieval_for_target_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        assert kwargs["source_id"] == 3
+        return SimpleNamespace(
+            answer="Answer from synchronized source",
+            retrieved_chunk_count=1,
+            latency_ms=1,
+            query_id=10,
+        )
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    assert (
+        await verify_pipeline.verify_query(
+            object(),
+            object(),
+            ingestion_result(),
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
