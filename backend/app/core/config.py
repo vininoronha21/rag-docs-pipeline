@@ -24,6 +24,22 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_user_agent: str = "rag-docs-pipeline"
 
+    http_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="Connection/read timeout for external HTTP calls (GitHub, OpenAI).",
+    )
+    http_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retry attempts for transient external HTTP failures (429/5xx/network).",
+    )
+    http_retry_backoff_seconds: float = Field(
+        default=0.5,
+        ge=0,
+        description="Base seconds for exponential backoff between HTTP retries.",
+    )
+
     embedding_provider: Literal["local", "openai"] = "local"
     embedding_dimensions: int = Field(
         default=1536,
@@ -41,6 +57,24 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum pgvector cosine similarity score required before answering.",
     )
+    retrieval_min_fused_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum leading reciprocal-rank-fusion score required to answer.",
+    )
+    retrieval_min_score_gap: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum fused-score gap from the second result when one exists.",
+    )
+    retrieval_candidate_k: int = Field(
+        default=50,
+        gt=12,
+        description="Candidates collected per retrieval arm; must exceed the maximum top_k.",
+    )
+    retrieval_rrf_k: int = Field(default=60, gt=0)
+    retrieval_vector_weight: float = Field(default=0.7, gt=0)
+    retrieval_text_weight: float = Field(default=0.3, gt=0)
 
     allowed_origins: list[str] = [
         "http://localhost:3000",

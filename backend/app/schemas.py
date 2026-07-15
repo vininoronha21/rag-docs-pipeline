@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -19,7 +20,7 @@ class GithubIngestRequest(BaseModel):
         default=None,
         description="Branch or tag. Defaults to repo default branch.",
     )
-    path: str = Field(default="", description="Optional folder path to ingest from.")
+    path: str = Field(min_length=1, description="Repository folder path to ingest from.")
     max_files: int = Field(default=50, ge=1, le=500)
 
 
@@ -30,7 +31,13 @@ class IngestedDocument(BaseModel):
 
 
 class IngestResponse(BaseModel):
+    status: Literal["synchronized", "no_op"]
     repository: str
+    branch: str
+    path: str
+    commit_sha: str
+    source_id: int
+    source_version_id: int
     documents: list[IngestedDocument]
     total_chunks: int
 
@@ -68,49 +75,50 @@ class QueryRequest(BaseModel):
     source: str | None = None
 
 
-class Citation(BaseModel):
-    chunk_id: int
+class AnswerSentence(BaseModel):
+    text: str
+    citation_id: str
+
+
+class ExtractiveAnswerResponse(BaseModel):
+    sentences: list[AnswerSentence]
+
+
+class EvidenceItem(BaseModel):
+    citation_id: str | None
+    supported_text: str | None
+    excerpt: str
     title: str | None
+    repository_path: str
+    section: str | None
+    commit_sha: str
     source_url: str
-    score: float
-    metadata: dict[str, Any]
+    vector_score: float | None
+    text_score: float | None
+    fused_score: float
+
+
+class QueryMetrics(BaseModel):
+    latency_ms: int
+    retrieved_chunk_count: int
+    top_fused_score: float | None
+    score_gap: float | None
 
 
 class QueryResponse(BaseModel):
-    query_id: int
-    answer: str
-    citations: list[Citation]
-    retrieved_chunk_ids: list[int]
-    latency_ms: int
-    retrieved_chunk_count: int
+    event_id: UUID
+    state: Literal["answered", "insufficient_evidence"]
+    answer: ExtractiveAnswerResponse | None
+    evidence: list[EvidenceItem]
+    metrics: QueryMetrics
 
 
 class QueryFeedbackRequest(BaseModel):
-    feedback: int = Field(
-        ge=-1,
-        le=1,
-        description="Feedback score: -1 negative, 0 neutral/reset, 1 positive.",
+    feedback: Literal[-1, 1] = Field(
+        description="Feedback score: -1 negative or 1 positive.",
     )
 
 
 class QueryFeedbackResponse(BaseModel):
-    query_id: int
-    feedback: int
-
-
-class QueryHistoryItem(BaseModel):
-    id: int
-    question: str
-    answer: str
-    retrieved_chunk_ids: list[int]
-    feedback: int | None
-    latency_ms: int
-    retrieved_chunk_count: int
-    created_at: datetime
-
-
-class QueryHistoryResponse(BaseModel):
-    items: list[QueryHistoryItem]
-    total: int
-    limit: int
-    offset: int
+    event_id: UUID
+    feedback: Literal[-1, 1]

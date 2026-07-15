@@ -1,23 +1,26 @@
+from uuid import UUID
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.schemas import (
     AnalyticsSummaryResponse,
-    Citation,
+    AnswerSentence,
     DocSourceItem,
     DocSourceListResponse,
     DocSourceUpdateRequest,
+    EvidenceItem,
+    ExtractiveAnswerResponse,
     GithubIngestRequest,
     HealthResponse,
     IngestedDocument,
     IngestResponse,
     QueryFeedbackRequest,
     QueryFeedbackResponse,
-    QueryHistoryItem,
-    QueryHistoryResponse,
+    QueryMetrics,
     QueryRequest,
     QueryResponse,
 )
@@ -27,14 +30,13 @@ from app.services.embeddings import (
     build_embedding_provider,
 )
 from app.services.github import GithubClientError
-from app.services.pipeline import ingest_github_repository
+from app.services.pipeline import SourceSynchronizationConflict, ingest_github_repository
 from app.services.querying import run_query
 from app.services.repositories import (
     get_analytics_summary,
     list_doc_sources,
-    list_queries,
     update_doc_source_enabled,
-    update_query_feedback,
+    update_query_event_feedback,
 )
 
 router = APIRouter()
@@ -80,7 +82,7 @@ async def ingest_github(
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
 ) -> IngestResponse:
     try:
-        repository, results = await ingest_github_repository(
+        result = await ingest_github_repository(
             session,
             settings=settings,
             embeddings=embeddings,
@@ -89,6 +91,11 @@ async def ingest_github(
             path=payload.path,
             max_files=payload.max_files,
         )
+    except SourceSynchronizationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source changed during synchronization. Retry the request.",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -108,14 +115,20 @@ async def ingest_github(
 
     documents = [
         IngestedDocument(
-            source_url=result.source_url,
-            title=result.title,
-            chunk_count=result.chunk_count,
+            source_url=document.source_url,
+            title=document.title,
+            chunk_count=document.chunk_count,
         )
-        for result in results
+        for document in result.documents
     ]
     return IngestResponse(
-        repository=repository,
+        status=result.status,
+        repository=result.repository,
+        branch=result.branch,
+        path=result.path,
+        commit_sha=result.commit_sha,
+        source_id=result.source_id,
+        source_version_id=result.source_version_id,
         documents=documents,
         total_chunks=sum(document.chunk_count for document in documents),
     )
@@ -214,67 +227,68 @@ async def query_docs(
         )
     except EmbeddingProviderError as exc:
         raise _embedding_provider_exception(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    citation_ids = {
+        item.chunk_id: item.citation_id
+        for item in result.evidence
+        if item.citation_id is not None
+    }
+    answer = None
+    if result.answer is not None:
+        answer = ExtractiveAnswerResponse(
+            sentences=[
+                AnswerSentence(text=sentence.text, citation_id=citation_ids[sentence.chunk_id])
+                for sentence in result.answer.sentences
+            ]
+        )
     return QueryResponse(
-        query_id=result.query_id,
-        answer=result.answer,
-        retrieved_chunk_ids=result.retrieved_chunk_ids,
-        latency_ms=result.latency_ms,
-        retrieved_chunk_count=result.retrieved_chunk_count,
-        citations=[
-            Citation(
-                chunk_id=chunk.id,
-                title=chunk.title,
-                source_url=chunk.source_url,
-                score=chunk.score,
-                metadata=chunk.metadata,
+        event_id=result.event_id,
+        state=result.state,
+        answer=answer,
+        evidence=[
+            EvidenceItem(
+                citation_id=item.citation_id,
+                supported_text=item.supported_text,
+                excerpt=item.excerpt,
+                title=item.title,
+                repository_path=item.repository_path,
+                section=item.section,
+                commit_sha=item.commit_sha,
+                source_url=item.source_url,
+                vector_score=item.vector_score,
+                text_score=item.text_score,
+                fused_score=item.fused_score,
             )
-            for chunk in result.chunks
+            for item in result.evidence
         ],
+        metrics=QueryMetrics(
+            latency_ms=result.metrics.latency_ms,
+            retrieved_chunk_count=result.metrics.retrieved_chunk_count,
+            top_fused_score=result.metrics.top_fused_score,
+            score_gap=result.metrics.score_gap,
+        ),
     )
 
 
-@router.get("/queries", response_model=QueryHistoryResponse)
-async def query_history(
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    session: AsyncSession = Depends(get_session),
-) -> QueryHistoryResponse:
-    queries, total = await list_queries(session, limit=limit, offset=offset)
-    return QueryHistoryResponse(
-        items=[
-            QueryHistoryItem(
-                id=query.id,
-                question=query.user_query,
-                answer=query.llm_response,
-                retrieved_chunk_ids=query.retrieved_chunks_ids,
-                feedback=query.user_feedback,
-                latency_ms=query.latency_ms,
-                retrieved_chunk_count=query.retrieved_chunk_count,
-                created_at=query.created_at,
-            )
-            for query in queries
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.patch("/queries/{query_id}/feedback", response_model=QueryFeedbackResponse)
+@router.patch("/query-events/{event_id}/feedback", response_model=QueryFeedbackResponse)
 async def record_query_feedback(
-    query_id: int,
+    event_id: UUID,
     payload: QueryFeedbackRequest,
     session: AsyncSession = Depends(get_session),
 ) -> QueryFeedbackResponse:
-    query = await update_query_feedback(
+    event = await update_query_event_feedback(
         session,
-        query_id=query_id,
+        event_id=event_id,
         feedback=payload.feedback,
     )
-    if query is None:
+    if event is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Query not found.",
+            detail="Query event not found.",
         )
     await session.commit()
-    return QueryFeedbackResponse(query_id=query.id, feedback=query.user_feedback)
+    return QueryFeedbackResponse(event_id=event.id, feedback=event.feedback)

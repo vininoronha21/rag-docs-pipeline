@@ -2,7 +2,7 @@ export type Citation = {
   chunk_id: number;
   title: string | null;
   source_url: string;
-  score: number;
+  score: number | null;
   metadata: Record<string, unknown>;
 };
 
