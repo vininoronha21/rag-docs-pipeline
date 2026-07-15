@@ -38,16 +38,19 @@ async def run_query(
     source: str | None,
     settings: Settings,
     embeddings: EmbeddingProvider,
+    source_id: int | None = None,
 ) -> QueryExecutionResult:
     validate_query_request(question=question, top_k=top_k)
     started_at = time.perf_counter()
     query_embedding = await embeddings.embed_query(question)
-    chunks = await retrieve_chunks(
-        session,
-        embedding=query_embedding,
-        top_k=top_k,
-        source=source,
-    )
+    retrieval_options = {
+        "embedding": query_embedding,
+        "top_k": top_k,
+        "source": source,
+    }
+    if source_id is not None:
+        retrieval_options["source_id"] = source_id
+    chunks = await retrieve_chunks(session, **retrieval_options)
     chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
     chunks = filter_prompt_injection_chunks(chunks)
     answer = build_extractive_answer(question, chunks)

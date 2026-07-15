@@ -1,11 +1,12 @@
 from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
 from app import cli as cli_module
-from app.services.pipeline import GithubIngestionResult
+from app.services.pipeline import GithubIngestionResult, IngestedDocumentResult
 from app.services.querying import QueryExecutionResult
 
 
@@ -34,7 +35,11 @@ def test_cli_ingest_requires_non_empty_path(arguments: list[str]) -> None:
     assert "PATH" in result.output
 
 
-def test_cli_ingest_reports_no_op_commit_and_version(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("status", ["synchronized", "no_op"])
+def test_cli_ingest_reports_complete_result(
+    monkeypatch: pytest.MonkeyPatch,
+    status: Literal["synchronized", "no_op"],
+) -> None:
     session = FakeSession()
     settings = object()
     embeddings = object()
@@ -52,15 +57,26 @@ def test_cli_ingest_reports_no_op_commit_and_version(monkeypatch: pytest.MonkeyP
             "path": "docs",
             "max_files": 50,
         }
+        documents = (
+            [
+                IngestedDocumentResult(
+                    source_url="https://github.com/example/project/blob/main/docs/index.md",
+                    title="Project docs",
+                    chunk_count=4,
+                )
+            ]
+            if status == "synchronized"
+            else []
+        )
         return GithubIngestionResult(
-            status="no_op",
+            status=status,
             repository="example/project",
             branch="main",
             path="docs",
             commit_sha="a" * 40,
             source_id=3,
             source_version_id=7,
-            documents=[],
+            documents=documents,
         )
 
     monkeypatch.setattr(cli_module, "get_settings", lambda: settings)
@@ -72,9 +88,47 @@ def test_cli_ingest_reports_no_op_commit_and_version(monkeypatch: pytest.MonkeyP
     cli_module.ingest_github("https://github.com/example/project", "docs")
 
     rendered = "\n".join(output)
-    assert "No changes" in rendered
+    if status == "no_op":
+        assert "No changes" in rendered
+        assert "Documents: none" in rendered
+    else:
+        assert "Synchronized" in rendered
+        assert "https://github.com/example/project/blob/main/docs/index.md" in rendered
+        assert "Project docs" in rendered
+        assert "4 chunks" in rendered
+    assert "Branch: main" in rendered
+    assert "Path: docs" in rendered
+    assert "Source ID: 3" in rendered
     assert "a" * 40 in rendered
     assert "Version: 7" in rendered
+
+
+@pytest.mark.parametrize("max_files", [0, 501])
+def test_cli_ingest_rejects_max_files_outside_api_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+    max_files: int,
+) -> None:
+    async def unexpected_ingest(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ingestion must not run")
+
+    monkeypatch.setattr(cli_module, "get_settings", lambda: object())
+    monkeypatch.setattr(cli_module, "build_embedding_provider", lambda _settings: object())
+    monkeypatch.setattr(cli_module, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(cli_module, "ingest_github_repository", unexpected_ingest)
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        [
+            "ingest-github",
+            "https://github.com/example/project",
+            "docs",
+            "--max-files",
+            str(max_files),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "max-files" in result.output.lower()
 
 
 @pytest.mark.asyncio

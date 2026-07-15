@@ -120,3 +120,35 @@ async def test_run_query_rejects_blank_question_before_embedding() -> None:
         )
 
     assert embeddings.question is None
+
+
+@pytest.mark.asyncio
+async def test_run_query_forwards_internal_source_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    embeddings = FakeEmbeddings()
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        assert args == (session,)
+        assert kwargs == {
+            "embedding": [0.1, 0.2],
+            "top_k": 5,
+            "source": "github",
+            "source_id": 17,
+        }
+        return []
+
+    async def fake_log_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(id=42, latency_ms=0, retrieved_chunk_count=0)
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query", fake_log_query)
+
+    await querying.run_query(
+        session,
+        question="How do I run FastAPI?",
+        top_k=5,
+        source="github",
+        source_id=17,
+        settings=SimpleNamespace(retrieval_min_score=0.1),
+        embeddings=embeddings,
+    )

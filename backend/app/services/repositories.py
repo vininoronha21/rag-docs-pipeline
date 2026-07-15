@@ -262,9 +262,11 @@ async def retrieve_chunks(
     embedding: list[float],
     top_k: int,
     source: str | None = None,
+    source_id: int | None = None,
 ) -> list[RetrievedChunk]:
     embedding_literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
     source_clause = "AND d.source = :source" if source else ""
+    source_id_clause = "AND ds.id = :source_id" if source_id is not None else ""
     statement = text(
         f"""
         SELECT
@@ -281,7 +283,7 @@ async def retrieve_chunks(
         JOIN documents d ON d.id = dc.document_id
         JOIN source_versions sv ON sv.id = d.source_version_id
         JOIN doc_sources ds ON ds.id = sv.source_id
-        WHERE true {source_clause}
+        WHERE true {source_clause} {source_id_clause}
           AND ds.active_version_id = sv.id
           AND ds.enabled IS TRUE
         ORDER BY dc.embedding <=> (:embedding)::vector
@@ -291,7 +293,12 @@ async def retrieve_chunks(
     rows = (
         await session.execute(
             statement,
-            {"embedding": embedding_literal, "top_k": top_k, "source": source},
+            {
+                "embedding": embedding_literal,
+                "top_k": top_k,
+                "source": source,
+                **({"source_id": source_id} if source_id is not None else {}),
+            },
         )
     ).mappings()
     return [

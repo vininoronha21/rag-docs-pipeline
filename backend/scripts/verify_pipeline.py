@@ -26,10 +26,10 @@ from rich.table import Table
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
-from app.db.models import DocSource, Document, DocumentChunk, QueryLog, SourceVersion
+from app.db.models import DocSource, Document, DocumentChunk, SourceVersion
 from app.db.session import AsyncSessionLocal
 from app.services.embeddings import build_embedding_provider
-from app.services.pipeline import ingest_github_repository
+from app.services.pipeline import GithubIngestionResult, ingest_github_repository
 from app.services.querying import run_query
 
 console = Console()
@@ -39,14 +39,12 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 VERIFY_REPO_URL = "https://github.com/tiangolo/fastapi"
-VERIFY_REPOSITORY = "tiangolo/fastapi"
 VERIFY_PATH = "docs/en/docs"
 VERIFY_MAX_FILES = 5
 VERIFY_QUESTION = "How do I run FastAPI locally?"
 VERIFY_SOURCE = "github"
 VERIFY_MIN_CHUNKS = 1
 VERIFY_MIN_DOCS = 1
-VERIFY_MIN_SOURCES = 1
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +123,10 @@ async def verify_tables_exist() -> bool:
         return False
 
 
-async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]:
+async def verify_ingest(
+    settings: Any,
+    embeddings: Any,
+) -> tuple[bool, GithubIngestionResult | None]:
     """Ingest a small repository snapshot and verify a repeated sync is a no-op."""
     try:
         async with AsyncSessionLocal() as session:
@@ -138,32 +139,13 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
                 path=VERIFY_PATH,
                 max_files=VERIFY_MAX_FILES,
             )
-        if result.status == "synchronized":
-            doc_count = len(result.documents)
-            chunk_count = sum(d.chunk_count for d in result.documents)
-        else:
-            async with AsyncSessionLocal() as session:
-                active_version = await session.get(SourceVersion, result.source_version_id)
-            if active_version is None:
-                _fail("Ingest active version", f"version_id={result.source_version_id} not found")
-                return False, 0, 0
-            doc_count = active_version.document_count
-            chunk_count = active_version.chunk_count
-        if doc_count < VERIFY_MIN_DOCS:
-            _fail(
-                "Ingest documents",
-                f"expected >= {VERIFY_MIN_DOCS}, got {doc_count}",
-            )
-            return False, doc_count, chunk_count
-        if chunk_count < VERIFY_MIN_CHUNKS:
-            _fail(
-                "Ingest chunks",
-                f"expected >= {VERIFY_MIN_CHUNKS}, got {chunk_count}",
-            )
-            return False, doc_count, chunk_count
+        persisted, counts = await verify_persistence(result)
+        if not persisted:
+            return False, None
         _pass(
             "Ingest documents and chunks",
-            f"{doc_count} documents, {chunk_count} chunks at commit {result.commit_sha}",
+            f"{counts['documents']} documents, {counts['document_chunks']} chunks "
+            f"at commit {result.commit_sha}",
         )
 
         async with AsyncSessionLocal() as session:
@@ -183,84 +165,116 @@ async def verify_ingest(settings: Any, embeddings: Any) -> tuple[bool, int, int]
             or repeated.commit_sha != result.commit_sha
         ):
             _fail("Repeated synchronization is a no-op")
-            return False, doc_count, chunk_count
+            return False, None
+        repeated_persisted, repeated_counts = await verify_persistence(repeated)
+        if not repeated_persisted or repeated_counts != counts:
+            _fail("Repeated synchronization preserves target corpus counts")
+            return False, None
         _pass(
             "Repeated synchronization is a no-op",
             f"source={repeated.source_id}, version={repeated.source_version_id}",
         )
-        return True, doc_count, chunk_count
+        return True, repeated
     except Exception as exc:  # noqa: BLE001
         _fail("Ingest documents and chunks", str(exc))
-        return False, 0, 0
+        return False, None
 
 
-async def verify_persistence() -> tuple[bool, dict[str, int]]:
-    """Confirm database counts match expected minimums after ingestion."""
+async def verify_persistence(
+    result: GithubIngestionResult,
+) -> tuple[bool, dict[str, int]]:
+    """Validate the source/version graph and real corpus counts for one ingestion result."""
     counts: dict[str, int] = {}
     try:
         async with AsyncSessionLocal() as session:
-            counts["documents"] = (
-                await session.execute(select(func.count()).select_from(Document))
-            ).scalar_one()
-            counts["document_chunks"] = (
-                await session.execute(select(func.count()).select_from(DocumentChunk))
-            ).scalar_one()
-            counts["doc_sources"] = (
-                await session.execute(select(func.count()).select_from(DocSource))
-            ).scalar_one()
-            counts["source_versions"] = (
-                await session.execute(select(func.count()).select_from(SourceVersion))
-            ).scalar_one()
-            counts["queries"] = (
-                await session.execute(select(func.count()).select_from(QueryLog))
-            ).scalar_one()
-
-        checks = {
-            "documents": VERIFY_MIN_DOCS,
-            "document_chunks": VERIFY_MIN_CHUNKS,
-            "doc_sources": VERIFY_MIN_SOURCES,
-            "source_versions": 1,
-        }
-        ok = True
-        for table, minimum in checks.items():
-            if counts[table] >= minimum:
-                _pass(f"Persistence: {table}", f"count = {counts[table]}")
-            else:
-                _fail(f"Persistence: {table}", f"expected >= {minimum}, got {counts[table]}")
-                ok = False
-
-        async with AsyncSessionLocal() as session:
-            owned_documents = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(Document)
-                    .join(SourceVersion, Document.source_version_id == SourceVersion.id)
-                    .join(DocSource, SourceVersion.source_id == DocSource.id)
-                )
-            ).scalar_one()
-            active_chunks = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(DocumentChunk)
-                    .join(Document, DocumentChunk.document_id == Document.id)
-                    .join(DocSource, DocSource.active_version_id == Document.source_version_id)
-                    .where(DocSource.enabled.is_(True))
-                )
-            ).scalar_one()
-        if owned_documents == counts["documents"]:
-            _pass("Document ownership chain", f"{owned_documents} documents owned")
-        else:
-            _fail(
-                "Document ownership chain",
-                f"expected {counts['documents']}, got {owned_documents}",
+            source = await session.get(DocSource, result.source_id)
+            version = await session.get(SourceVersion, result.source_version_id)
+            documents = list(
+                (
+                    await session.scalars(
+                        select(Document).where(
+                            Document.source_version_id == result.source_version_id
+                        )
+                    )
+                ).all()
             )
-            ok = False
-        if active_chunks >= VERIFY_MIN_CHUNKS:
-            _pass("Active corpus", f"{active_chunks} chunks")
-        else:
-            _fail("Active corpus", f"expected >= {VERIFY_MIN_CHUNKS}, got {active_chunks}")
-            ok = False
+            chunk_count = await session.scalar(
+                select(func.count())
+                .select_from(DocumentChunk)
+                .join(Document, DocumentChunk.document_id == Document.id)
+                .where(Document.source_version_id == result.source_version_id)
+            )
 
+        counts = {
+            "documents": len(documents),
+            "document_chunks": chunk_count or 0,
+        }
+        checks = [
+            (source is not None, "Target source exists"),
+            (version is not None, "Target source version exists"),
+        ]
+        if source is not None:
+            checks.extend(
+                [
+                    (source.repository == result.repository, "Source repository matches result"),
+                    (source.branch == result.branch, "Source branch matches result"),
+                    (source.path == result.path, "Source path matches result"),
+                    (
+                        source.active_version_id == result.source_version_id,
+                        "Result version is active for source",
+                    ),
+                ]
+            )
+        if version is not None:
+            checks.extend(
+                [
+                    (version.source_id == result.source_id, "Version belongs to result source"),
+                    (version.commit_sha == result.commit_sha, "Version commit matches result"),
+                    (
+                        version.document_count == counts["documents"],
+                        "Stored document count matches real documents",
+                    ),
+                    (
+                        version.chunk_count == counts["document_chunks"],
+                        "Stored chunk count matches real chunks",
+                    ),
+                ]
+            )
+        checks.extend(
+            [
+                (
+                    all(
+                        document.source_version_id == result.source_version_id
+                        for document in documents
+                    ),
+                    "Every document belongs to result version",
+                ),
+                (counts["documents"] >= VERIFY_MIN_DOCS, "Target version has documents"),
+                (counts["document_chunks"] >= VERIFY_MIN_CHUNKS, "Target version has chunks"),
+            ]
+        )
+        if result.status == "synchronized":
+            checks.extend(
+                [
+                    (
+                        len(result.documents) == counts["documents"],
+                        "Result document count matches persistence",
+                    ),
+                    (
+                        sum(document.chunk_count for document in result.documents)
+                        == counts["document_chunks"],
+                        "Result chunk count matches persistence",
+                    ),
+                ]
+            )
+
+        ok = True
+        for passed, label in checks:
+            if passed:
+                _pass(label)
+            else:
+                _fail(label)
+                ok = False
         return ok, counts
     except Exception as exc:  # noqa: BLE001
         _fail("Persistence checks", str(exc))
@@ -315,27 +329,27 @@ async def verify_query(settings: Any, embeddings: Any) -> bool:
         return False
 
 
-async def verify_source_disable(settings: Any, embeddings: Any) -> bool:
+async def verify_source_disable(
+    settings: Any,
+    embeddings: Any,
+    result: GithubIngestionResult,
+) -> bool:
     """Disable the verification source, test retrieval, then restore its prior state."""
     source_id: int | None = None
     previous_enabled: bool | None = None
     try:
         async with AsyncSessionLocal() as session:
-            source = (
-                await session.execute(
-                    select(DocSource)
-                    .where(
-                        DocSource.source_type == VERIFY_SOURCE,
-                        DocSource.repository == VERIFY_REPOSITORY,
-                        DocSource.path == VERIFY_PATH,
-                    )
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if source is None:
-                _fail("Source disable: no source found to disable")
+            source = await session.get(DocSource, result.source_id)
+            if (
+                source is None
+                or source.repository != result.repository
+                or source.branch != result.branch
+                or source.path != result.path
+                or source.active_version_id != result.source_version_id
+            ):
+                _fail("Source disable: ingestion target is no longer active")
                 return False
-            source_id = source.id
+            source_id = result.source_id
             previous_enabled = source.enabled
             source.enabled = False
             await session.commit()
@@ -349,6 +363,7 @@ async def verify_source_disable(settings: Any, embeddings: Any) -> bool:
                     source=VERIFY_SOURCE,
                     settings=settings,
                     embeddings=embeddings,
+                    source_id=source_id,
                 )
             chunks_when_disabled = result.retrieved_chunk_count
         finally:
@@ -429,13 +444,15 @@ async def main() -> int:
     # Step 3: ingest
     console.print()
     _info(f"Ingesting {VERIFY_REPO_URL} (max_files={VERIFY_MAX_FILES}) …")
-    ingest_ok, _docs, _chunks = await verify_ingest(settings, embeddings)
+    ingest_ok, target = await verify_ingest(settings, embeddings)
     results["Ingest documents and chunks"] = ingest_ok
 
     # Step 4: persistence
     console.print()
     _info("Checking persistence …")
-    persist_ok, counts = await verify_persistence()
+    persist_ok = False
+    if target is not None:
+        persist_ok, _counts = await verify_persistence(target)
     results["Persistence counts"] = persist_ok
 
     # Step 5: query
@@ -446,8 +463,8 @@ async def main() -> int:
     # Step 6: source disable
     console.print()
     _info("Testing source disable filter …")
-    results["Disabled source excluded from retrieval"] = await verify_source_disable(
-        settings, embeddings
+    results["Disabled source excluded from retrieval"] = (
+        await verify_source_disable(settings, embeddings, target) if target is not None else False
     )
 
     # Summary

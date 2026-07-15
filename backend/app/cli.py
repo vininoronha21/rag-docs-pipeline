@@ -24,6 +24,11 @@ def ingest_github(
     """Ingest Markdown documentation from a GitHub repository."""
     if not path:
         raise typer.BadParameter("Path must not be empty.", param_hint="path")
+    if max_files < 1 or max_files > 500:
+        raise typer.BadParameter(
+            "Must be between 1 and 500.",
+            param_hint="max-files",
+        )
 
     async def run() -> None:
         settings = get_settings()
@@ -44,8 +49,20 @@ def ingest_github(
             console.print(
                 f"Synchronized {len(result.documents)} documents from {result.repository}"
             )
+        console.print(f"Branch: {result.branch}")
+        console.print(f"Path: {result.path}")
         console.print(f"Commit: {result.commit_sha}")
+        console.print(f"Source ID: {result.source_id}")
         console.print(f"Version: {result.source_version_id}")
+        if result.documents:
+            console.print("Documents:")
+            for document in result.documents:
+                title = document.title or "(untitled)"
+                console.print(
+                    f"- {document.source_url} | {title} | {document.chunk_count} chunks"
+                )
+        else:
+            console.print("Documents: none")
         console.print(f"Total chunks: {sum(document.chunk_count for document in result.documents)}")
 
     asyncio.run(run())
