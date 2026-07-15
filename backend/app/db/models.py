@@ -1,11 +1,15 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID as UUIDValue
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -14,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.core.config import get_settings
@@ -71,6 +75,11 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
         Index("ix_document_chunks_document_hash", "document_id", "chunk_hash", unique=True),
+        Index(
+            "ix_document_chunks_search_vector_gin",
+            "search_vector",
+            postgresql_using="gin",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -84,6 +93,13 @@ class DocumentChunk(Base):
         Vector(get_settings().embedding_dimensions), nullable=False
     )
     chunk_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "to_tsvector('portuguese', coalesce(chunk_text, ''))",
+            persisted=True,
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -91,19 +107,59 @@ class DocumentChunk(Base):
     document: Mapped[Document] = relationship(back_populates="chunks")
 
 
-class QueryLog(Base):
-    __tablename__ = "queries"
+class QueryEvent(Base):
+    __tablename__ = "query_events"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('answered', 'insufficient_evidence')",
+            name="ck_query_events_state",
+        ),
+        CheckConstraint(
+            "latency_ms >= 0",
+            name="ck_query_events_latency_ms_nonnegative",
+        ),
+        CheckConstraint(
+            "retrieved_chunk_count >= 0",
+            name="ck_query_events_retrieved_chunk_count_nonnegative",
+        ),
+        CheckConstraint(
+            "feedback IS NULL OR feedback IN (-1, 1)",
+            name="ck_query_events_feedback",
+        ),
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_query: Mapped[str] = mapped_column(Text, nullable=False)
-    retrieved_chunks_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
-    llm_response: Mapped[str] = mapped_column(Text, nullable=False)
-    user_feedback: Mapped[int | None] = mapped_column(Integer)
-    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    retrieved_chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    id: Mapped[UUIDValue] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieved_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), default=list, server_default="{}", nullable=False
+    )
+    source_version_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), default=list, server_default="{}", nullable=False
+    )
+    top_fused_score: Mapped[float | None] = mapped_column(Float)
+    score_gap: Mapped[float | None] = mapped_column(Float)
+    feedback: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+@dataclass
+class QueryLog:
+    """Unmapped Sprint 02 compatibility object; query content cannot persist at schema head."""
+
+    id: int = 0
+    user_query: str = ""
+    retrieved_chunks_ids: list[int] | None = None
+    llm_response: str = ""
+    user_feedback: int | None = None
+    latency_ms: int = 0
+    retrieved_chunk_count: int = 0
+    created_at: datetime | None = None
 
 
 class DocSource(Base):
