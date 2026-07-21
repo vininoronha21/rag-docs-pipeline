@@ -57,7 +57,6 @@ async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name, environment=settings.environment)
 
 
-@router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
 async def analytics_summary(
     session: AsyncSession = Depends(get_session),
 ) -> AnalyticsSummaryResponse:
@@ -74,7 +73,6 @@ async def analytics_summary(
     )
 
 
-@router.post("/ingest/github", response_model=IngestResponse)
 async def ingest_github(
     payload: GithubIngestRequest,
     session: AsyncSession = Depends(get_session),
@@ -166,7 +164,6 @@ def _embedding_provider_exception(exc: EmbeddingProviderError) -> HTTPException:
     )
 
 
-@router.get("/sources", response_model=DocSourceListResponse)
 async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
     sources = await list_doc_sources(session)
     return DocSourceListResponse(
@@ -183,7 +180,6 @@ async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSource
     )
 
 
-@router.patch("/sources/{source_id}", response_model=DocSourceItem)
 async def update_doc_source(
     source_id: int,
     payload: DocSourceUpdateRequest,

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "RAG Docs Pipeline"
     environment: Literal["local", "test", "production"] = "local"
     api_prefix: str = "/api"
+    admin_secret: str = Field(default="", repr=False)
 
     database_url: str = Field(
         default="postgresql+asyncpg://rag:rag@localhost:5432/rag_docs",
@@ -82,6 +83,12 @@ class Settings(BaseSettings):
     ]
 
     public_backend_url: HttpUrl | None = None
+
+    @model_validator(mode="after")
+    def validate_admin_secret(self) -> "Settings":
+        if self.environment == "production" and not self.admin_secret.strip():
+            raise ValueError("ADMIN_SECRET must be set when ENVIRONMENT=production.")
+        return self
 
 
 @lru_cache

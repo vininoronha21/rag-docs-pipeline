@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.admin_routes import router as admin_router
 from app.api.routes import router
 from app.core.config import get_settings
 
@@ -16,6 +17,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router, prefix=settings.api_prefix)
+    app.include_router(admin_router, prefix=settings.api_prefix)
     return app
 
 
