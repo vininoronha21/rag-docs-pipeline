@@ -1,7 +1,7 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -24,6 +24,7 @@ from app.schemas import (
     QueryMetrics,
     QueryRequest,
     QueryResponse,
+    ReadinessResponse,
 )
 from app.services.embeddings import (
     EmbeddingProvider,
@@ -33,6 +34,7 @@ from app.services.embeddings import (
 from app.services.github import GithubClientError
 from app.services.pipeline import SourceSynchronizationConflict, ingest_github_repository
 from app.services.querying import run_query
+from app.services.readiness import check_readiness
 from app.services.repositories import (
     get_analytics_summary,
     list_doc_sources,
@@ -63,6 +65,21 @@ def get_embedding_provider(settings: Settings = Depends(get_settings)) -> Embedd
 @router.get("/health", response_model=HealthResponse)
 async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name, environment=settings.environment)
+
+
+@router.get("/ready", response_model=ReadinessResponse)
+async def ready(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> ReadinessResponse:
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    readiness = ReadinessResponse.model_validate(
+        await check_readiness(session, request_id=request_id)
+    )
+    if readiness.status != "ready":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return readiness
 
 
 async def analytics_summary(

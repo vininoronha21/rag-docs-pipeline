@@ -1,5 +1,6 @@
-import conftest
 import pytest
+
+from . import conftest
 
 
 def _validator():
