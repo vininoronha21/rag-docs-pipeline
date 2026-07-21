@@ -1,9 +1,18 @@
 import asyncio
+import hashlib
+import hmac
+import secrets
 import time
 from collections import deque
 from collections.abc import Callable
 
 from fastapi import HTTPException, Request, status
+
+_PROCESS_KEY = secrets.token_bytes(32)
+
+
+def _derive_client_key(client_host: str) -> str:
+    return hmac.new(_PROCESS_KEY, client_host.encode(), hashlib.sha256).hexdigest()
 
 
 class InMemoryRateLimiter:
@@ -22,14 +31,18 @@ class InMemoryRateLimiter:
 
     async def __call__(self, request: Request) -> None:
         client = request.client
-        client_key = client.host if client is not None else ""
+        client_key = _derive_client_key(client.host if client is not None else "")
         now = self._monotonic()
         cutoff = now - self.window_seconds
 
         async with self._lock:
+            for key, timestamps in list(self._requests.items()):
+                while timestamps and timestamps[0] <= cutoff:
+                    timestamps.popleft()
+                if not timestamps:
+                    del self._requests[key]
+
             timestamps = self._requests.setdefault(client_key, deque())
-            while timestamps and timestamps[0] <= cutoff:
-                timestamps.popleft()
 
             if len(timestamps) >= self.max_requests:
                 raise HTTPException(

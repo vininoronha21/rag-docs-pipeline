@@ -103,6 +103,35 @@ async def test_limiter_uses_client_host_not_caller_supplied_headers() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_limiter_does_not_retain_raw_client_host_in_state_keys() -> None:
+    clock = FakeClock()
+    limiter = build_limiter(max_requests=2, window_seconds=60, monotonic=clock.monotonic)
+    raw_host = "198.51.100.10"
+
+    await limiter(request_for(raw_host))
+
+    assert raw_host not in limiter._requests
+    assert all(raw_host not in key for key in limiter._requests)
+
+
+@pytest.mark.asyncio
+async def test_limiter_removes_empty_stale_client_queues_when_handling_requests() -> None:
+    clock = FakeClock()
+    limiter = build_limiter(max_requests=2, window_seconds=60, monotonic=clock.monotonic)
+
+    await limiter(request_for("198.51.100.10"))
+    await limiter(request_for("203.0.113.25"))
+    stale_keys = set(limiter._requests)
+
+    clock.advance(60)
+    await limiter(request_for("192.0.2.44"))
+
+    assert stale_keys
+    assert stale_keys.isdisjoint(limiter._requests)
+    assert len(limiter._requests) == 1
+
+
 def test_rate_limit_settings_match_portfolio_defaults() -> None:
     settings = Settings(_env_file=None)
 
