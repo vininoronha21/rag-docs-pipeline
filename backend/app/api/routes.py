@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import InMemoryRateLimiter
 from app.db.session import get_session
 from app.schemas import (
     AnalyticsSummaryResponse,
@@ -40,6 +41,13 @@ from app.services.repositories import (
 )
 
 router = APIRouter()
+
+query_rate_limit = InMemoryRateLimiter(
+    max_requests=get_settings().query_rate_limit_per_minute,
+)
+feedback_rate_limit = InMemoryRateLimiter(
+    max_requests=get_settings().feedback_rate_limit_per_minute,
+)
 
 
 def get_embedding_provider(settings: Settings = Depends(get_settings)) -> EmbeddingProvider:
@@ -205,7 +213,7 @@ async def update_doc_source(
     )
 
 
-@router.post("/query", response_model=QueryResponse)
+@router.post("/query", response_model=QueryResponse, dependencies=[Depends(query_rate_limit)])
 async def query_docs(
     payload: QueryRequest,
     session: AsyncSession = Depends(get_session),
@@ -270,7 +278,11 @@ async def query_docs(
     )
 
 
-@router.patch("/query-events/{event_id}/feedback", response_model=QueryFeedbackResponse)
+@router.patch(
+    "/query-events/{event_id}/feedback",
+    response_model=QueryFeedbackResponse,
+    dependencies=[Depends(feedback_rate_limit)],
+)
 async def record_query_feedback(
     event_id: UUID,
     payload: QueryFeedbackRequest,

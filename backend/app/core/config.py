@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     environment: Literal["local", "test", "production"] = "local"
     api_prefix: str = "/api"
     admin_secret: str = Field(default="", repr=False)
+    query_rate_limit_per_minute: int = Field(default=20, gt=0)
+    feedback_rate_limit_per_minute: int = Field(default=30, gt=0)
+    sync_rate_limit_per_minute: int = Field(default=2, gt=0)
 
     database_url: str = Field(
         default="postgresql+asyncpg://rag:rag@localhost:5432/rag_docs",
