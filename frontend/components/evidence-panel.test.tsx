@@ -43,7 +43,7 @@ function EvidencePanelHarness() {
   return (
     <>
       <button type="button" onClick={() => setOpen(true)}>
-        Inspect evidence
+        Inspecionar evidência
       </button>
       <EvidencePanel open={open} onOpenChange={setOpen} evidence={evidenceRecords} selectedId="c2" />
     </>
@@ -67,8 +67,12 @@ describe("EvidencePanel", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Evidence for citation c2" });
+    const dialog = screen.getByRole("dialog", { name: "Evidência para citação c2" });
 
+    expect(within(dialog).getByText("Inspeção da fonte")).toBeVisible();
+    expect(
+      within(dialog).getByText("Trecho exato usado para sustentar a frase da resposta.")
+    ).toBeVisible();
     expect(within(dialog).getByText("frontend/README.md")).toBeVisible();
     expect(within(dialog).getByText("Install")).toBeVisible();
     expect(within(dialog).getByText("abc123def456")).toBeVisible();
@@ -77,7 +81,7 @@ describe("EvidencePanel", () => {
       "MARK"
     );
 
-    const sourceLink = within(dialog).getByRole("link", { name: "Open commit-pinned source" });
+    const sourceLink = within(dialog).getByRole("link", { name: "Abrir fonte fixada no commit" });
     expect(sourceLink).toHaveAttribute(
       "href",
       "https://github.com/example/rag-docs-pipeline/blob/abc123def456/frontend/README.md#L7"
@@ -99,9 +103,11 @@ describe("EvidencePanel", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Evidence unavailable" });
+    const dialog = screen.getByRole("dialog", { name: "Evidência indisponível" });
 
-    expect(within(dialog).getByText("No retrieved source excerpt is available for this citation.")).toBeVisible();
+    expect(
+      within(dialog).getByText("Nenhum trecho de fonte recuperado está disponível para esta citação.")
+    ).toBeVisible();
     expect(dialog).not.toHaveTextContent("docs/development/local.md");
     expect(dialog).not.toHaveTextContent("During local development");
   });
@@ -118,8 +124,8 @@ describe("EvidencePanel", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Evidence for citation c2" });
-    const evidenceBody = within(dialog).getByRole("region", { name: "Evidence details" });
+    const dialog = screen.getByRole("dialog", { name: "Evidência para citação c2" });
+    const evidenceBody = within(dialog).getByRole("region", { name: "Detalhes da evidência" });
 
     expect(dialog).toHaveClass("evidence-dialog__content");
     expect(evidenceBody).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
@@ -130,14 +136,14 @@ describe("EvidencePanel", () => {
 
     render(<EvidencePanelHarness />);
 
-    const opener = screen.getByRole("button", { name: "Inspect evidence" });
+    const opener = screen.getByRole("button", { name: "Inspecionar evidência" });
     await user.click(opener);
 
-    expect(screen.getByRole("dialog", { name: "Evidence for citation c2" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Evidência para citação c2" })).toBeVisible();
 
     await user.keyboard("{Escape}");
 
-    expect(screen.queryByRole("dialog", { name: "Evidence for citation c2" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Evidência para citação c2" })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
 });

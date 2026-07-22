@@ -85,6 +85,18 @@ function answeredResponse(): PublicQueryResponse {
   };
 }
 
+function duplicateCitationResponse(): PublicQueryResponse {
+  return {
+    ...answeredResponse(),
+    answer: {
+      sentences: [
+        { text: "Execute uvicorn app.main:app --reload.", citation_id: "c1" },
+        { text: "A API recarrega automaticamente durante o desenvolvimento.", citation_id: "c1" }
+      ]
+    }
+  };
+}
+
 function insufficientResponse(): PublicQueryResponse {
   return {
     event_id: "550e8400-e29b-41d4-a716-446655440001",
@@ -210,13 +222,37 @@ describe("ChatShell", () => {
     expect(within(secondSentence.closest("p") as HTMLElement).getByRole("button", {
       name: "Inspecionar evidência c2"
     })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Open commit-pinned source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Abrir fonte fixada no commit" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Inspecionar evidência c2" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Evidence for citation c2" });
+    const dialog = await screen.findByRole("dialog", { name: "Evidência para citação c2" });
+    expect(within(dialog).getByText("Inspeção da fonte")).toBeVisible();
+    expect(
+      within(dialog).getByText("Trecho exato usado para sustentar a frase da resposta.")
+    ).toBeVisible();
+    expect(within(dialog).getByRole("link", { name: "Abrir fonte fixada no commit" })).toBeVisible();
     expect(within(dialog).getByText("frontend/README.md")).toBeVisible();
     expect(within(dialog).queryByText("docs/development/local.md")).not.toBeInTheDocument();
+  });
+
+  test("keeps sentence keys stable when multiple answer sentences cite the same evidence", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      askDocsMock.mockResolvedValueOnce(duplicateCitationResponse());
+      render(<ChatShell />);
+
+      await submitQuestion();
+      await screen.findByText("A API recarrega automaticamente durante o desenvolvimento.");
+
+      const duplicateKeyMessages = consoleError.mock.calls
+        .flat()
+        .filter((message) => String(message).includes("Encountered two children with the same key"));
+
+      expect(duplicateKeyMessages).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("opens the evidence panel automatically when evidence is insufficient and keeps the refusal visible", async () => {
@@ -228,7 +264,7 @@ describe("ChatShell", () => {
     expect(
       await screen.findByText("Não encontrei evidências suficientes na documentação indexada para responder com segurança.")
     ).toBeVisible();
-    expect(await screen.findByRole("dialog", { name: "Evidence for citation c1" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "Evidência para citação c1" })).toBeVisible();
   });
 
   test("rolls back optimistic UUID feedback when the public feedback request fails", async () => {

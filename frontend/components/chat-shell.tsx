@@ -225,8 +225,11 @@ export function ChatShell() {
 
                   <div className="space-y-3">
                     {sentences.length > 0 ? (
-                      sentences.map((sentence) => (
-                        <p key={`${response.event_id}-${sentence.citation_id}`} className="text-base leading-8 text-ink">
+                      sentences.map((sentence, sentenceIndex) => (
+                        <p
+                          key={`${response.event_id}-${sentence.citation_id}-${sentenceIndex}`}
+                          className="text-base leading-8 text-ink"
+                        >
                           <span>{sentence.text}</span>{" "}
                           <button
                             type="button"
