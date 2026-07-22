@@ -27,11 +27,37 @@ A consulta realizada em 2026-07-13 encontrou 124 arquivos Markdown/MDX em `docs/
 - A documentacao usa diretivas proprias do gerador, incluindo blocos como `/// tip` e marcadores de inclusao. A normalizacao deve evitar que essa sintaxe introduza ruido nos chunks.
 - O diretorio usa o codigo `pt`, embora a prosa verificada seja PT-BR e o idioma aprovado para a avaliacao seja `pt-BR`.
 
-## Gate futuro 16+4
+## Dataset de avaliacao 16+4
 
-Antes de iniciar a fase de avaliacao, deve ser criado e revisado um conjunto com:
+O arquivo `questions.jsonl` contem 20 perguntas curadas a partir da fonte aprovada:
 
-- 16 perguntas respondiveis pela fonte aprovada;
-- 4 perguntas deliberadamente nao suportadas pela fonte.
+- 16 perguntas respondiveis por paths e secoes publicas em `docs/pt/docs`;
+- 4 perguntas plausiveis, mas deliberadamente nao suportadas pela fonte aprovada.
 
-As perguntas definitivas nao fazem parte desta tarefa. Cada pergunta devera ser validada contra o corpus ingerido para confirmar sua classificacao e evitar ambiguidade.
+Cada linha do JSONL usa o schema:
+
+- `id`: identificador unico;
+- `question`: pergunta em portugues brasileiro;
+- `answerable`: `true` para casos suportados, `false` para casos nao suportados;
+- `expected_state`: `answered` ou `insufficient_evidence`;
+- `expected_paths`: paths esperados para casos respondiveis;
+- `expected_sections`: secoes Markdown esperadas para casos respondiveis.
+
+## Gate de release
+
+O runner `backend/scripts/evaluate_retrieval.py` valida estritamente o dataset e executa as perguntas contra a versao ativa indexada da fonte aprovada. O processo sai com codigo `0` somente quando:
+
+- pelo menos 14 das 16 perguntas respondiveis tem acerto Top-3 em path e secao esperados;
+- todas as 4 perguntas nao suportadas retornam `insufficient_evidence`;
+- todas as sentencas da resposta estao validadas contra o chunk citado.
+
+Comando padrao:
+
+```bash
+PYENV_VERSION=3.12.13 PYTHONPATH=backend python backend/scripts/evaluate_retrieval.py \
+  --dataset evaluation/pt-br/questions.jsonl \
+  --top-k 3 \
+  --output evaluation/pt-br/latest-report.json
+```
+
+`latest-report.json` e um artefato local gerado sob demanda e nao deve ser tratado como fonte curada.

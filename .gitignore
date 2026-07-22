@@ -23,6 +23,7 @@ out/
 *.log
 .DS_Store
 Thumbs.db
+evaluation/**/latest-report.json
 
 .docker/
 postgres_data/
