@@ -60,7 +60,11 @@ class EvaluatedCase:
             return False
         return any(
             path in self.case.expected_paths and section in self.case.expected_sections
-            for path, section in zip(self.evidence_paths, self.evidence_sections, strict=False)
+            for path, section in zip(
+                self.evidence_paths[:3],
+                self.evidence_sections[:3],
+                strict=False,
+            )
         )
 
     @property
@@ -162,6 +166,10 @@ def validate_cases(cases: list[EvaluationCase]) -> None:
             raise ValueError("Every case must have a non-empty id.")
         if not case.question.strip():
             raise ValueError(f"Case {case.id} must have a non-empty question.")
+        if any(not path.strip() for path in case.expected_paths):
+            raise ValueError(f"Case {case.id} expected_paths must contain non-blank entries.")
+        if any(not section.strip() for section in case.expected_sections):
+            raise ValueError(f"Case {case.id} expected_sections must contain non-blank entries.")
         if case.answerable:
             if case.expected_state != "answered":
                 raise ValueError(f'Case {case.id} must use expected_state="answered".')

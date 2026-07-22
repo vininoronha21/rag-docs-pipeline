@@ -127,6 +127,45 @@ def test_answerable_top3_hit_uses_retrieval_evidence_not_answer_state() -> None:
     assert report.answerable_top3_hits == 1
 
 
+def test_answerable_top3_hit_ignores_matches_after_rank_three() -> None:
+    mod = evaluation_module()
+    expected_path = "docs/pt/docs/tutorial/query-params.md"
+    expected_section = "Parâmetros de consulta obrigatórios { #required-query-parameters }"
+
+    report = mod.evaluate(
+        cases=[
+            mod.EvaluatedCase(
+                case=mod.EvaluationCase(
+                    id="answerable-01",
+                    question="Quando um parametro de consulta passa a ser obrigatorio?",
+                    answerable=True,
+                    expected_state="answered",
+                    expected_paths=[expected_path],
+                    expected_sections=[expected_section],
+                ),
+                observed_state="answered",
+                evidence_paths=[
+                    "docs/pt/docs/tutorial/first-steps.md",
+                    "docs/pt/docs/tutorial/path-params.md",
+                    "docs/pt/docs/tutorial/body.md",
+                    expected_path,
+                ],
+                evidence_sections=[
+                    "Passo 1: importe `FastAPI` { #step-1-import-fastapi }",
+                    "Valores predefinidos { #predefined-values }",
+                    "Corpo da requisição { #request-body }",
+                    expected_section,
+                ],
+                answer_sentence_count=1,
+                validated_answer_sentence_count=1,
+            )
+        ],
+        top_k=10,
+    )
+
+    assert report.answerable_top3_hits == 0
+
+
 def test_validation_requires_twenty_unique_ids() -> None:
     mod = evaluation_module()
     cases = make_dataset_cases()
@@ -152,6 +191,19 @@ def test_validation_requires_answerable_expected_paths_and_sections() -> None:
 
     with pytest.raises(ValueError, match="non-empty expected paths and sections"):
         mod.validate_cases(cases)
+
+
+def test_validation_rejects_blank_expected_path_and_section_entries() -> None:
+    mod = evaluation_module()
+    path_cases = make_dataset_cases()
+    path_cases[0] = replace(path_cases[0], expected_paths=[" "])
+    section_cases = make_dataset_cases()
+    section_cases[0] = replace(section_cases[0], expected_sections=["\t"])
+
+    with pytest.raises(ValueError, match="non-blank"):
+        mod.validate_cases(path_cases)
+    with pytest.raises(ValueError, match="non-blank"):
+        mod.validate_cases(section_cases)
 
 
 def test_validation_requires_unsupported_insufficient_evidence_state() -> None:
