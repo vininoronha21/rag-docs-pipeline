@@ -1,10 +1,11 @@
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.observability import get_request_id, set_query_log_context
 from app.core.rate_limit import InMemoryRateLimiter
 from app.db.session import get_session
 from app.schemas import (
@@ -73,23 +74,13 @@ async def ready(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> ReadinessResponse:
-    request_id = _readiness_request_id(request)
+    request_id = get_request_id(request)
     readiness = ReadinessResponse.model_validate(
         await check_readiness(session, request_id=request_id)
     )
     if readiness.status != "ready":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return readiness
-
-
-def _readiness_request_id(request: Request) -> str:
-    request_id = request.headers.get("X-Request-ID")
-    if request_id:
-        try:
-            return str(UUID(request_id))
-        except ValueError:
-            pass
-    return str(uuid4())
 
 
 async def analytics_summary(
@@ -243,6 +234,7 @@ async def update_doc_source(
 @router.post("/query", response_model=QueryResponse, dependencies=[Depends(query_rate_limit)])
 async def query_docs(
     payload: QueryRequest,
+    request: Request = None,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
@@ -276,7 +268,7 @@ async def query_docs(
                 for sentence in result.answer.sentences
             ]
         )
-    return QueryResponse(
+    response = QueryResponse(
         event_id=result.event_id,
         state=result.state,
         answer=answer,
@@ -303,6 +295,12 @@ async def query_docs(
             score_gap=result.metrics.score_gap,
         ),
     )
+    set_query_log_context(
+        request,
+        event_id=response.event_id,
+        evidence_state=response.state,
+    )
+    return response
 
 
 @router.patch(
