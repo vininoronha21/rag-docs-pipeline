@@ -1,8 +1,39 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
+
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://rag:rag@localhost:5432/rag_docs"
+DEFAULT_MIGRATION_DATABASE_URL = "postgresql+psycopg://rag:rag@localhost:5432/rag_docs"
+FORBIDDEN_ASYNCPG_RUNTIME_QUERY_KEYS = frozenset({"channel_binding", "sslmode"})
+
+
+def _validate_database_driver(
+    env_name: str, database_url: str, expected_driver: str
+) -> URL:
+    try:
+        parsed_url = make_url(database_url)
+    except ArgumentError as exc:
+        raise ValueError(f"{env_name} must be a valid SQLAlchemy database URL.") from exc
+
+    if parsed_url.drivername != expected_driver:
+        raise ValueError(f"{env_name} must use the {expected_driver} SQLAlchemy driver.")
+    return parsed_url
+
+
+def _validate_asyncpg_runtime_query_parameters(database_url: URL) -> None:
+    unsupported_keys = sorted(
+        FORBIDDEN_ASYNCPG_RUNTIME_QUERY_KEYS.intersection(database_url.query)
+    )
+    if unsupported_keys:
+        unsupported = ", ".join(unsupported_keys)
+        raise ValueError(
+            "DATABASE_URL uses asyncpg; use the asyncpg TLS query parameter "
+            f"ssl instead of unsupported parameter(s): {unsupported}."
+        )
 
 
 class Settings(BaseSettings):
@@ -15,10 +46,18 @@ class Settings(BaseSettings):
     app_name: str = "RAG Docs Pipeline"
     environment: Literal["local", "test", "production"] = "local"
     api_prefix: str = "/api"
+    admin_secret: str = Field(default="", repr=False)
+    query_rate_limit_per_minute: int = Field(default=20, gt=0)
+    feedback_rate_limit_per_minute: int = Field(default=30, gt=0)
+    sync_rate_limit_per_minute: int = Field(default=2, gt=0)
 
     database_url: str = Field(
-        default="postgresql+asyncpg://rag:rag@localhost:5432/rag_docs",
+        default=DEFAULT_DATABASE_URL,
         description="Async SQLAlchemy database URL.",
+    )
+    migration_database_url: str = Field(
+        default=DEFAULT_MIGRATION_DATABASE_URL,
+        description="Sync SQLAlchemy database URL for Alembic migrations.",
     )
 
     github_token: str | None = None
@@ -82,6 +121,35 @@ class Settings(BaseSettings):
     ]
 
     public_backend_url: HttpUrl | None = None
+
+    @model_validator(mode="after")
+    def validate_deployment_settings(self) -> "Settings":
+        runtime_url = _validate_database_driver(
+            "DATABASE_URL", self.database_url, "postgresql+asyncpg"
+        )
+        _validate_asyncpg_runtime_query_parameters(runtime_url)
+        _validate_database_driver(
+            "MIGRATION_DATABASE_URL",
+            self.migration_database_url,
+            "postgresql+psycopg",
+        )
+
+        if self.environment == "production" and not self.admin_secret.strip():
+            raise ValueError("ADMIN_SECRET must be set when ENVIRONMENT=production.")
+        if self.environment == "production":
+            missing = [
+                env_name
+                for field_name, env_name in (
+                    ("database_url", "DATABASE_URL"),
+                    ("migration_database_url", "MIGRATION_DATABASE_URL"),
+                )
+                if field_name not in self.model_fields_set
+            ]
+            if missing:
+                raise ValueError(
+                    f"{', '.join(missing)} must be set when ENVIRONMENT=production."
+                )
+        return self
 
 
 @lru_cache

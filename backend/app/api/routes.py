@@ -1,10 +1,12 @@
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.observability import get_request_id, set_query_log_context
+from app.core.rate_limit import InMemoryRateLimiter
 from app.db.session import get_session
 from app.schemas import (
     AnalyticsSummaryResponse,
@@ -23,6 +25,7 @@ from app.schemas import (
     QueryMetrics,
     QueryRequest,
     QueryResponse,
+    ReadinessResponse,
 )
 from app.services.embeddings import (
     EmbeddingProvider,
@@ -32,6 +35,7 @@ from app.services.embeddings import (
 from app.services.github import GithubClientError
 from app.services.pipeline import SourceSynchronizationConflict, ingest_github_repository
 from app.services.querying import run_query
+from app.services.readiness import check_readiness
 from app.services.repositories import (
     get_analytics_summary,
     list_doc_sources,
@@ -40,6 +44,13 @@ from app.services.repositories import (
 )
 
 router = APIRouter()
+
+query_rate_limit = InMemoryRateLimiter(
+    max_requests=get_settings().query_rate_limit_per_minute,
+)
+feedback_rate_limit = InMemoryRateLimiter(
+    max_requests=get_settings().feedback_rate_limit_per_minute,
+)
 
 
 def get_embedding_provider(settings: Settings = Depends(get_settings)) -> EmbeddingProvider:
@@ -57,7 +68,21 @@ async def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(status="ok", app=settings.app_name, environment=settings.environment)
 
 
-@router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
+@router.get("/ready", response_model=ReadinessResponse)
+async def ready(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> ReadinessResponse:
+    request_id = get_request_id(request)
+    readiness = ReadinessResponse.model_validate(
+        await check_readiness(session, request_id=request_id)
+    )
+    if readiness.status != "ready":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return readiness
+
+
 async def analytics_summary(
     session: AsyncSession = Depends(get_session),
 ) -> AnalyticsSummaryResponse:
@@ -74,7 +99,6 @@ async def analytics_summary(
     )
 
 
-@router.post("/ingest/github", response_model=IngestResponse)
 async def ingest_github(
     payload: GithubIngestRequest,
     session: AsyncSession = Depends(get_session),
@@ -166,7 +190,6 @@ def _embedding_provider_exception(exc: EmbeddingProviderError) -> HTTPException:
     )
 
 
-@router.get("/sources", response_model=DocSourceListResponse)
 async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
     sources = await list_doc_sources(session)
     return DocSourceListResponse(
@@ -183,7 +206,6 @@ async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSource
     )
 
 
-@router.patch("/sources/{source_id}", response_model=DocSourceItem)
 async def update_doc_source(
     source_id: int,
     payload: DocSourceUpdateRequest,
@@ -209,9 +231,10 @@ async def update_doc_source(
     )
 
 
-@router.post("/query", response_model=QueryResponse)
+@router.post("/query", response_model=QueryResponse, dependencies=[Depends(query_rate_limit)])
 async def query_docs(
     payload: QueryRequest,
+    request: Request = None,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_embedding_provider),
@@ -245,7 +268,7 @@ async def query_docs(
                 for sentence in result.answer.sentences
             ]
         )
-    return QueryResponse(
+    response = QueryResponse(
         event_id=result.event_id,
         state=result.state,
         answer=answer,
@@ -272,9 +295,19 @@ async def query_docs(
             score_gap=result.metrics.score_gap,
         ),
     )
+    set_query_log_context(
+        request,
+        event_id=response.event_id,
+        evidence_state=response.state,
+    )
+    return response
 
 
-@router.patch("/query-events/{event_id}/feedback", response_model=QueryFeedbackResponse)
+@router.patch(
+    "/query-events/{event_id}/feedback",
+    response_model=QueryFeedbackResponse,
+    dependencies=[Depends(feedback_rate_limit)],
+)
 async def record_query_feedback(
     event_id: UUID,
     payload: QueryFeedbackRequest,

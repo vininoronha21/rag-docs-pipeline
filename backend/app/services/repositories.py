@@ -363,11 +363,13 @@ async def retrieve_chunks(
                 vector_candidates.vector_rank,
                 text_candidates.text_rank,
                 coalesce(
-                    :vector_weight / (:rrf_k + vector_candidates.vector_rank),
-                    0
+                    CAST(:vector_weight AS double precision) /
+                    (CAST(:rrf_k AS double precision) + vector_candidates.vector_rank),
+                    0.0
                 ) + coalesce(
-                    :text_weight / (:rrf_k + text_candidates.text_rank),
-                    0
+                    CAST(:text_weight AS double precision) /
+                    (CAST(:rrf_k AS double precision) + text_candidates.text_rank),
+                    0.0
                 ) AS fused_score
             FROM candidate_ids
             LEFT JOIN vector_candidates USING (id)
