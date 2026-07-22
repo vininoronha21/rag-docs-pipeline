@@ -11,8 +11,12 @@ driver: `postgresql+asyncpg://`.
 `MIGRATION_DATABASE_URL` is owned by Alembic migrations and must use the sync
 SQLAlchemy driver: `postgresql+psycopg://`.
 
-Hosted Neon URLs should keep TLS query parameters intact, for example
-`?sslmode=require`. Alembic does not derive its URL from `DATABASE_URL`.
+Hosted database URLs should use driver-specific TLS query parameters:
+runtime asyncpg URLs use `?ssl=require`, while migration psycopg URLs use
+`?sslmode=require`. Do not put psycopg-only `sslmode` or `channel_binding`
+query parameters on `DATABASE_URL`; SQLAlchemy forwards them to asyncpg as
+unsupported connection kwargs. Alembic does not derive its URL from
+`DATABASE_URL`.
 
 `NEXT_PUBLIC_BACKEND_URL` is frontend-only Vercel configuration. Do not add it
 as a required backend secret.
@@ -28,7 +32,7 @@ as a required backend secret.
 | `QUERY_RATE_LIMIT_PER_MINUTE` | Optional | Private non-secret | Backend API | `20` | `20` |
 | `FEEDBACK_RATE_LIMIT_PER_MINUTE` | Optional | Private non-secret | Backend API | `30` | `30` |
 | `SYNC_RATE_LIMIT_PER_MINUTE` | Optional | Private non-secret | Backend API | `2` | `2` |
-| `DATABASE_URL` | Required in production | Secret | Backend API runtime | `postgresql+asyncpg://rag:rag@localhost:5432/rag_docs` | `postgresql+asyncpg://app_user:example_password@ep-example.us-east-2.aws.neon.tech/rag_docs?sslmode=require` |
+| `DATABASE_URL` | Required in production | Secret | Backend API runtime | `postgresql+asyncpg://rag:rag@localhost:5432/rag_docs` | `postgresql+asyncpg://app_user:example_password@ep-example.us-east-2.aws.neon.tech/rag_docs?ssl=require` |
 | `MIGRATION_DATABASE_URL` | Required in production | Secret | Alembic migration job | `postgresql+psycopg://rag:rag@localhost:5432/rag_docs` | `postgresql+psycopg://app_user:example_password@ep-example.us-east-2.aws.neon.tech/rag_docs?sslmode=require` |
 | `GITHUB_TOKEN` | Optional | Secret | Backend ingestion | Empty | `github_pat_example_token` |
 | `GITHUB_USER_AGENT` | Optional | Private non-secret | Backend ingestion | `rag-docs-pipeline` | `rag-docs-pipeline` |

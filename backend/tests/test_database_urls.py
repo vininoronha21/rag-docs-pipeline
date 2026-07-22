@@ -24,14 +24,14 @@ def test_production_requires_explicit_runtime_and_migration_database_urls() -> N
         )
 
 
-def test_production_preserves_tls_query_parameters_on_both_database_urls() -> None:
+def test_production_preserves_driver_specific_tls_query_parameters() -> None:
     runtime_url = (
         "postgresql+asyncpg://user:pass@ep-runtime.neon.tech/app"
-        "?sslmode=require&channel_binding=require"
+        "?ssl=require"
     )
     migration_url = (
         "postgresql+psycopg://user:pass@ep-migration.neon.tech/app"
-        "?sslmode=require&channel_binding=require"
+        "?sslmode=require"
     )
 
     settings = Settings(
@@ -44,6 +44,26 @@ def test_production_preserves_tls_query_parameters_on_both_database_urls() -> No
 
     assert settings.database_url == runtime_url
     assert settings.migration_database_url == migration_url
+
+
+@pytest.mark.parametrize("query_string", ["sslmode=require", "channel_binding=require"])
+def test_runtime_database_url_rejects_psycopg_tls_query_parameters(
+    query_string: str,
+) -> None:
+    with pytest.raises(ValidationError, match="DATABASE_URL"):
+        Settings(
+            environment="production",
+            admin_secret="secret-for-tests",
+            database_url=(
+                "postgresql+asyncpg://user:pass@ep-runtime.neon.tech/app"
+                f"?{query_string}"
+            ),
+            migration_database_url=(
+                "postgresql+psycopg://user:pass@ep-migration.neon.tech/app"
+                "?sslmode=require"
+            ),
+            _env_file=None,
+        )
 
 
 def test_runtime_database_url_rejects_sync_driver() -> None:
@@ -67,11 +87,11 @@ def test_alembic_uses_migration_database_url_without_deriving_from_runtime_url(
 ) -> None:
     runtime_url = (
         "postgresql+asyncpg://runtime:pass@ep-runtime.neon.tech/runtime_db"
-        "?sslmode=require&channel_binding=require"
+        "?ssl=require"
     )
     migration_url = (
         "postgresql+psycopg://migration:pass@ep-migration.neon.tech/migration_db"
-        "?sslmode=require&channel_binding=require"
+        "?sslmode=require"
     )
     recorded_options: dict[str, str] = {}
 

@@ -3,21 +3,37 @@ from typing import Literal
 
 from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://rag:rag@localhost:5432/rag_docs"
 DEFAULT_MIGRATION_DATABASE_URL = "postgresql+psycopg://rag:rag@localhost:5432/rag_docs"
+FORBIDDEN_ASYNCPG_RUNTIME_QUERY_KEYS = frozenset({"channel_binding", "sslmode"})
 
 
-def _validate_database_driver(env_name: str, database_url: str, expected_driver: str) -> None:
+def _validate_database_driver(
+    env_name: str, database_url: str, expected_driver: str
+) -> URL:
     try:
-        drivername = make_url(database_url).drivername
+        parsed_url = make_url(database_url)
     except ArgumentError as exc:
         raise ValueError(f"{env_name} must be a valid SQLAlchemy database URL.") from exc
 
-    if drivername != expected_driver:
+    if parsed_url.drivername != expected_driver:
         raise ValueError(f"{env_name} must use the {expected_driver} SQLAlchemy driver.")
+    return parsed_url
+
+
+def _validate_asyncpg_runtime_query_parameters(database_url: URL) -> None:
+    unsupported_keys = sorted(
+        FORBIDDEN_ASYNCPG_RUNTIME_QUERY_KEYS.intersection(database_url.query)
+    )
+    if unsupported_keys:
+        unsupported = ", ".join(unsupported_keys)
+        raise ValueError(
+            "DATABASE_URL uses asyncpg; use the asyncpg TLS query parameter "
+            f"ssl instead of unsupported parameter(s): {unsupported}."
+        )
 
 
 class Settings(BaseSettings):
@@ -108,7 +124,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_deployment_settings(self) -> "Settings":
-        _validate_database_driver("DATABASE_URL", self.database_url, "postgresql+asyncpg")
+        runtime_url = _validate_database_driver(
+            "DATABASE_URL", self.database_url, "postgresql+asyncpg"
+        )
+        _validate_asyncpg_runtime_query_parameters(runtime_url)
         _validate_database_driver(
             "MIGRATION_DATABASE_URL",
             self.migration_database_url,
