@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 EvidenceState = Literal["answered", "insufficient_evidence"]
 
@@ -53,11 +54,6 @@ class EvaluatedCase:
     def answerable_top3_hit(self) -> bool:
         if not self.case.answerable:
             return False
-        if (
-            self.answer_sentence_count > 0
-            and self.validated_answer_sentence_count != self.answer_sentence_count
-        ):
-            return False
         return any(
             path in self.case.expected_paths and section in self.case.expected_sections
             for path, section in zip(
@@ -66,6 +62,10 @@ class EvaluatedCase:
                 strict=False,
             )
         )
+
+    @property
+    def answer_sentence_validation_failures(self) -> int:
+        return max(self.answer_sentence_count - self.validated_answer_sentence_count, 0)
 
     @property
     def unsupported_refusal(self) -> bool:
@@ -88,6 +88,7 @@ class EvaluatedCase:
             "source_urls": self.source_urls,
             "answer_sentence_count": self.answer_sentence_count,
             "validated_answer_sentence_count": self.validated_answer_sentence_count,
+            "answer_sentence_validation_failures": self.answer_sentence_validation_failures,
             "answerable_top3_hit": self.answerable_top3_hit,
             "unsupported_refusal": self.unsupported_refusal,
         }
@@ -100,6 +101,7 @@ class EvaluationReport:
     answerable_total: int
     unsupported_refusals: int
     unsupported_total: int
+    answer_sentence_validation_failures: int
     top_k: int
     case_results: list[EvaluatedCase]
 
@@ -111,11 +113,13 @@ class EvaluationReport:
             "quality_gate": {
                 "answerable_top3_threshold": ANSWERABLE_TOP3_THRESHOLD,
                 "unsupported_refusal_threshold": UNSUPPORTED_REFUSAL_THRESHOLD,
+                "answer_sentence_validation_failures_allowed": 0,
             },
             "answerable_top3_hits": self.answerable_top3_hits,
             "answerable_total": self.answerable_total,
             "unsupported_refusals": self.unsupported_refusals,
             "unsupported_total": self.unsupported_total,
+            "answer_sentence_validation_failures": self.answer_sentence_validation_failures,
             "cases": [result.to_json() for result in self.case_results],
         }
 
@@ -125,11 +129,15 @@ def evaluate(*, cases: list[EvaluatedCase], top_k: int = 3) -> EvaluationReport:
     unsupported_total = len(cases) - answerable_total
     answerable_top3_hits = sum(result.answerable_top3_hit for result in cases)
     unsupported_refusals = sum(result.unsupported_refusal for result in cases)
+    answer_sentence_validation_failures = sum(
+        result.answer_sentence_validation_failures for result in cases
+    )
     passed = (
         answerable_total == ANSWERABLE_TOTAL
         and unsupported_total == UNSUPPORTED_TOTAL
         and answerable_top3_hits >= ANSWERABLE_TOP3_THRESHOLD
         and unsupported_refusals == UNSUPPORTED_REFUSAL_THRESHOLD
+        and answer_sentence_validation_failures == 0
     )
     return EvaluationReport(
         passed=passed,
@@ -137,6 +145,7 @@ def evaluate(*, cases: list[EvaluatedCase], top_k: int = 3) -> EvaluationReport:
         answerable_total=answerable_total,
         unsupported_refusals=unsupported_refusals,
         unsupported_total=unsupported_total,
+        answer_sentence_validation_failures=answer_sentence_validation_failures,
         top_k=top_k,
         case_results=list(cases),
     )
@@ -225,7 +234,21 @@ async def run_live_evaluation(
                 embeddings=embeddings,
                 source_id=source_id,
             )
-        evaluated_cases.append(_build_evaluated_case(case=case, result=result))
+            ranked_chunks = await _retrieve_ranked_chunks(
+                session,
+                question=case.question,
+                top_k=top_k,
+                source_id=source_id,
+                settings=settings,
+                embeddings=embeddings,
+            )
+        evaluated_cases.append(
+            _build_evaluated_case(
+                case=case,
+                result=result,
+                ranked_chunks=ranked_chunks,
+            )
+        )
 
     return evaluate(cases=evaluated_cases, top_k=top_k)
 
@@ -257,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         "Evaluation "
         f"{'PASSED' if report.passed else 'FAILED'}: "
         f"answerable_top3={report.answerable_top3_hits}/{report.answerable_total}, "
-        f"unsupported_refusals={report.unsupported_refusals}/{report.unsupported_total}"
+        f"unsupported_refusals={report.unsupported_refusals}/{report.unsupported_total}, "
+        f"answer_sentence_validation_failures={report.answer_sentence_validation_failures}"
     )
     return 0 if report.passed else 1
 
@@ -344,10 +368,42 @@ def _require_string_list(value: object, *, line_number: int, field_name: str) ->
     return list(value)
 
 
-def _build_evaluated_case(*, case: EvaluationCase, result: Any) -> EvaluatedCase:
+async def _retrieve_ranked_chunks(
+    session: Any,
+    *,
+    question: str,
+    top_k: int,
+    source_id: int,
+    settings: Any,
+    embeddings: Any,
+) -> list[Any]:
+    from app.services.rag import filter_chunks_by_min_score, filter_prompt_injection_chunks
+    from app.services.repositories import retrieve_chunks
+
+    query_embedding = await embeddings.embed_query(question)
+    chunks = await retrieve_chunks(
+        session,
+        question=question,
+        embedding=query_embedding,
+        top_k=top_k,
+        candidate_k=settings.retrieval_candidate_k,
+        rrf_k=settings.retrieval_rrf_k,
+        vector_weight=settings.retrieval_vector_weight,
+        text_weight=settings.retrieval_text_weight,
+        source="github",
+        source_id=source_id,
+    )
+    chunks = filter_chunks_by_min_score(chunks, min_score=settings.retrieval_min_score)
+    return filter_prompt_injection_chunks(chunks)
+
+
+def _build_evaluated_case(
+    *,
+    case: EvaluationCase,
+    result: Any,
+    ranked_chunks: list[Any],
+) -> EvaluatedCase:
     answer_sentences = result.answer.sentences if result.answer is not None else []
-    evidence_paths = [evidence.repository_path for evidence in result.evidence]
-    evidence_sections = [evidence.section or "" for evidence in result.evidence]
     evidence_excerpt_by_chunk = {
         evidence.chunk_id: evidence.excerpt for evidence in result.evidence
     }
@@ -360,12 +416,24 @@ def _build_evaluated_case(*, case: EvaluationCase, result: Any) -> EvaluatedCase
     return EvaluatedCase(
         case=case,
         observed_state=result.state,
-        evidence_paths=evidence_paths,
-        evidence_sections=evidence_sections,
-        source_urls=[evidence.source_url for evidence in result.evidence],
+        evidence_paths=[chunk.repository_path for chunk in ranked_chunks],
+        evidence_sections=[_ranked_chunk_section(chunk) for chunk in ranked_chunks],
+        source_urls=[_ranked_chunk_source_url(chunk) for chunk in ranked_chunks],
         answer_sentence_count=len(answer_sentences),
         validated_answer_sentence_count=validated_sentence_count,
     )
+
+
+def _ranked_chunk_section(chunk: Any) -> str:
+    section = chunk.metadata.get("section")
+    return str(section) if section is not None else ""
+
+
+def _ranked_chunk_source_url(chunk: Any) -> str:
+    if chunk.source == "github":
+        encoded_path = quote(chunk.repository_path, safe="/")
+        return f"https://github.com/{chunk.repository}/blob/{chunk.commit_sha}/{encoded_path}"
+    return str(chunk.source_url)
 
 
 if __name__ == "__main__":

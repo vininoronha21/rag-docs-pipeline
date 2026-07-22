@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -99,6 +100,19 @@ def test_evaluation_fails_when_unsupported_case_is_answered() -> None:
     assert report.unsupported_refusals == 3
 
 
+def test_evaluation_fails_when_answer_sentence_validation_fails_at_passing_counts() -> None:
+    mod = evaluation_module()
+    cases = make_cases(answerable_hits=16, unsupported_hits=4)
+    cases[0] = replace(cases[0], validated_answer_sentence_count=0)
+
+    report = mod.evaluate(cases=cases)
+
+    assert report.answerable_top3_hits == 16
+    assert report.unsupported_refusals == 4
+    assert report.answer_sentence_validation_failures == 1
+    assert report.passed is False
+
+
 def test_answerable_top3_hit_uses_retrieval_evidence_not_answer_state() -> None:
     mod = evaluation_module()
     expected_path = "docs/pt/docs/tutorial/path-params.md"
@@ -164,6 +178,136 @@ def test_answerable_top3_hit_ignores_matches_after_rank_three() -> None:
     )
 
     assert report.answerable_top3_hits == 0
+
+
+@pytest.mark.asyncio
+async def test_live_evaluation_scores_ranked_retrieval_not_answer_citation_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = evaluation_module()
+    from app.core import config as config_module
+    from app.db import session as session_module
+    from app.services import embeddings as embeddings_module
+    from app.services import querying as querying_module
+    from app.services import repositories as repositories_module
+
+    expected_path = "docs/pt/docs/tutorial/query-params.md"
+    expected_section = "Parâmetros de consulta obrigatórios { #required-query-parameters }"
+    settings = SimpleNamespace(
+        retrieval_candidate_k=50,
+        retrieval_rrf_k=60,
+        retrieval_vector_weight=0.7,
+        retrieval_text_weight=0.3,
+        retrieval_min_score=0.0,
+    )
+    source = SimpleNamespace(id=17, enabled=True, active_version_id=23)
+    query_calls: list[dict[str, Any]] = []
+    retrieval_calls: list[dict[str, Any]] = []
+
+    class FakeEmbeddingProvider:
+        async def embed_query(self, text: str) -> list[float]:
+            assert text == "Quando o parametro de consulta e obrigatorio?"
+            return [0.1, 0.2]
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+    async def fake_get_doc_source_by_identity(*args: Any, **kwargs: Any) -> Any:
+        return source
+
+    async def fake_run_query(*args: Any, **kwargs: Any) -> Any:
+        query_calls.append(kwargs)
+        return SimpleNamespace(
+            state="answered",
+            answer=SimpleNamespace(
+                sentences=[SimpleNamespace(text="Resposta citada.", chunk_id=901)]
+            ),
+            evidence=[
+                SimpleNamespace(
+                    repository_path="docs/pt/docs/tutorial/body.md",
+                    section="Corpo da requisição { #request-body }",
+                    excerpt="Resposta citada.",
+                    chunk_id=901,
+                    source_url="https://example.test/answer-citation",
+                )
+            ],
+        )
+
+    async def fake_retrieve_chunks(*args: Any, **kwargs: Any) -> list[Any]:
+        retrieval_calls.append(kwargs)
+        return [
+            repositories_module.RetrievedChunk(
+                id=902,
+                document_id=1,
+                text="Ranked retrieval text.",
+                chunk_index=0,
+                metadata={"section": expected_section},
+                title=None,
+                repository="fastapi/fastapi",
+                repository_path=expected_path,
+                commit_sha="abc123",
+                source_url="https://example.test/ranked-retrieval",
+                source="github",
+                source_id=source.id,
+                source_version_id=source.active_version_id,
+                vector_score=0.9,
+                text_score=1.0,
+                vector_rank=1,
+                text_rank=1,
+                fused_score=0.02,
+            )
+        ]
+
+    monkeypatch.setattr(config_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        embeddings_module,
+        "build_embedding_provider",
+        lambda settings: FakeEmbeddingProvider(),
+    )
+    monkeypatch.setattr(session_module, "AsyncSessionLocal", FakeSessionContext)
+    monkeypatch.setattr(
+        repositories_module,
+        "get_doc_source_by_identity",
+        fake_get_doc_source_by_identity,
+    )
+    monkeypatch.setattr(querying_module, "run_query", fake_run_query)
+    monkeypatch.setattr(repositories_module, "retrieve_chunks", fake_retrieve_chunks)
+
+    report = await mod.run_live_evaluation(
+        cases=[
+            mod.EvaluationCase(
+                id="answerable-01",
+                question="Quando o parametro de consulta e obrigatorio?",
+                answerable=True,
+                expected_state="answered",
+                expected_paths=[expected_path],
+                expected_sections=[expected_section],
+            )
+        ],
+        top_k=3,
+    )
+
+    assert report.answerable_top3_hits == 1
+    assert report.case_results[0].evidence_paths == [expected_path]
+    assert report.case_results[0].validated_answer_sentence_count == 1
+    assert query_calls[0]["top_k"] == 3
+    assert retrieval_calls == [
+        {
+            "question": "Quando o parametro de consulta e obrigatorio?",
+            "embedding": [0.1, 0.2],
+            "top_k": 3,
+            "candidate_k": 50,
+            "rrf_k": 60,
+            "vector_weight": 0.7,
+            "text_weight": 0.3,
+            "source": "github",
+            "source_id": 17,
+        }
+    ]
 
 
 def test_validation_requires_twenty_unique_ids() -> None:
