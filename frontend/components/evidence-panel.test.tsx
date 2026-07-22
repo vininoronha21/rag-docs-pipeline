@@ -87,6 +87,44 @@ describe("EvidencePanel", () => {
     expect(dialog).not.toHaveTextContent(/confidence/i);
   });
 
+  test("shows the unavailable state when a requested citation id is missing", () => {
+    const onOpenChange = vi.fn();
+
+    render(
+      <EvidencePanel
+        open
+        onOpenChange={onOpenChange}
+        evidence={evidenceRecords}
+        selectedId="missing-citation"
+      />
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Evidence unavailable" });
+
+    expect(within(dialog).getByText("No retrieved source excerpt is available for this citation.")).toBeVisible();
+    expect(dialog).not.toHaveTextContent("docs/development/local.md");
+    expect(dialog).not.toHaveTextContent("During local development");
+  });
+
+  test("bounds the evidence body as the scrollable region for long excerpts", () => {
+    const onOpenChange = vi.fn();
+
+    render(
+      <EvidencePanel
+        open
+        onOpenChange={onOpenChange}
+        evidence={evidenceRecords}
+        selectedId="c2"
+      />
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Evidence for citation c2" });
+    const evidenceBody = within(dialog).getByRole("region", { name: "Evidence details" });
+
+    expect(dialog).toHaveClass("evidence-dialog__content");
+    expect(evidenceBody).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+  });
+
   test("closes on Escape and restores focus to the opener", async () => {
     const user = userEvent.setup();
 

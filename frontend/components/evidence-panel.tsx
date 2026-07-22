@@ -16,7 +16,9 @@ type EvidencePanelProps = {
 export function EvidencePanel({ open, onOpenChange, evidence, selectedId }: EvidencePanelProps) {
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const selectedEvidence =
-    evidence.find((record) => record.citation_id === selectedId) ?? evidence[0] ?? null;
+    selectedId === null
+      ? evidence[0] ?? null
+      : evidence.find((record) => record.citation_id === selectedId) ?? null;
   const citationLabel = selectedEvidence?.citation_id ?? selectedId ?? "source";
 
   return (
@@ -37,8 +39,8 @@ export function EvidencePanel({ open, onOpenChange, evidence, selectedId }: Evid
           }}
         >
           {selectedEvidence ? (
-            <div className="flex h-full flex-col">
-              <header className="border-b border-line px-5 py-4">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <header className="shrink-0 border-b border-line px-5 py-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
@@ -58,7 +60,11 @@ export function EvidencePanel({ open, onOpenChange, evidence, selectedId }: Evid
                 </div>
               </header>
 
-              <div className="flex-1 overflow-y-auto px-5 py-5">
+              <div
+                role="region"
+                aria-label="Evidence details"
+                className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+              >
                 <dl className="grid gap-3 rounded-md border border-line bg-slate-50 p-4 text-sm">
                   <Metadata label="Path">{selectedEvidence.repository_path}</Metadata>
                   {selectedEvidence.section ? (
