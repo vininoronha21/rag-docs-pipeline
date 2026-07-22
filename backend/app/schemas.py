@@ -11,6 +11,12 @@ class HealthResponse(BaseModel):
     environment: str
 
 
+class ReadinessResponse(BaseModel):
+    status: Literal["ready", "not_ready"]
+    database: Literal["ok", "error"]
+    pgvector: Literal["ok", "missing", "error", "unknown"]
+
+
 class GithubIngestRequest(BaseModel):
     repo_url: HttpUrl = Field(
         examples=["https://github.com/tiangolo/fastapi"],

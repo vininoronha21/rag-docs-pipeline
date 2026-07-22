@@ -1,109 +1,42 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import {
-  Clock3,
-  Database,
-  ExternalLink,
-  Github,
-  Loader2,
-  RefreshCw,
-  SendHorizonal,
-  ThumbsDown,
-  ThumbsUp
-} from "lucide-react";
-import {
-  askDocs,
-  getQueryHistory,
-  ingestGithub,
-  QueryHistoryItem,
-  QueryResponse,
-  sendQueryFeedback
-} from "@/lib/api";
+import { FormEvent, useState } from "react";
+import { Database, ExternalLink, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
+import { askDocs, Evidence, PublicQueryResponse, sendQueryFeedback } from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
   content: string;
-  queryId?: number;
-  feedback?: -1 | 0 | 1;
-  citations?: QueryResponse["citations"];
+  eventId?: string;
+  feedback?: -1 | 1;
+  evidence?: Evidence[];
   latencyMs?: number;
   retrievedChunkCount?: number;
+  insufficientEvidence?: boolean;
 };
 
-function citationMetadata(citation: QueryResponse["citations"][number]) {
-  const section = typeof citation.metadata.section === "string" ? citation.metadata.section : null;
-  const sourcePath =
-    typeof citation.metadata.source_path === "string" ? citation.metadata.source_path : null;
-  const detail = [sourcePath, section].filter(Boolean).join(" / ");
+function answerText(response: PublicQueryResponse) {
+  const sentences = response.answer?.sentences ?? [];
+  if (sentences.length > 0) {
+    return sentences.map((sentence) => sentence.text).join(" ");
+  }
+  return "I could not find enough evidence in the indexed documentation to answer safely.";
+}
+
+function evidenceMetadata(evidence: Evidence) {
+  const detail = [evidence.repository_path, evidence.section].filter(Boolean).join(" / ");
 
   return {
     detail,
-    label: citation.title ?? sourcePath ?? citation.source_url
+    label: evidence.title ?? evidence.repository_path ?? evidence.source_url
   };
 }
 
 export function ChatShell() {
-  const [repoUrl, setRepoUrl] = useState("https://github.com/tiangolo/fastapi");
   const [question, setQuestion] = useState("How do I run FastAPI locally?");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [busy, setBusy] = useState<"ingest" | "query" | null>(null);
-  const [history, setHistory] = useState<QueryHistoryItem[]>([]);
-  const [historyBusy, setHistoryBusy] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"query" | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    void loadHistory();
-  }, []);
-
-  async function loadHistory() {
-    setHistoryBusy(true);
-    setHistoryError(null);
-    try {
-      const response = await getQueryHistory(10);
-      setHistory(response.items);
-    } catch (err) {
-      setHistoryError(err instanceof Error ? err.message : "Could not load query history");
-    } finally {
-      setHistoryBusy(false);
-    }
-  }
-
-  function restoreHistoryItem(item: QueryHistoryItem) {
-    setMessages((current) => [
-      ...current,
-      { role: "user", content: item.question },
-      {
-        role: "assistant",
-        content: item.answer,
-        queryId: item.id,
-        feedback: item.feedback ?? undefined,
-        latencyMs: item.latency_ms,
-        retrievedChunkCount: item.retrieved_chunk_count
-      }
-    ]);
-  }
-
-  async function handleIngest(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    setBusy("ingest");
-    try {
-      await ingestGithub(repoUrl, 25);
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: `Indexed Markdown documentation from ${repoUrl}.`
-        }
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ingestion failed");
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -119,14 +52,14 @@ export function ChatShell() {
         ...current,
         {
           role: "assistant",
-          content: response.answer,
-          queryId: response.query_id,
-          citations: response.citations,
-          latencyMs: response.latency_ms,
-          retrievedChunkCount: response.retrieved_chunk_count
+          content: answerText(response),
+          eventId: response.event_id,
+          evidence: response.evidence,
+          latencyMs: response.metrics.latency_ms,
+          retrievedChunkCount: response.metrics.retrieved_chunk_count,
+          insufficientEvidence: response.insufficient_evidence
         }
       ]);
-      void loadHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Query failed");
     } finally {
@@ -134,21 +67,17 @@ export function ChatShell() {
     }
   }
 
-  async function handleFeedback(messageIndex: number, queryId: number, feedback: -1 | 1) {
+  async function handleFeedback(messageIndex: number, eventId: string, feedback: -1 | 1) {
     const currentFeedback = messages[messageIndex]?.feedback;
-    const nextFeedback = currentFeedback === feedback ? 0 : feedback;
 
     setMessages((current) =>
       current.map((message, index) =>
-        index === messageIndex ? { ...message, feedback: nextFeedback } : message
+        index === messageIndex ? { ...message, feedback } : message
       )
     );
 
     try {
-      await sendQueryFeedback(queryId, nextFeedback);
-      setHistory((current) =>
-        current.map((item) => (item.id === queryId ? { ...item, feedback: nextFeedback } : item))
-      );
+      await sendQueryFeedback(eventId, feedback);
     } catch (err) {
       setMessages((current) =>
         current.map((message, index) =>
@@ -169,90 +98,16 @@ export function ChatShell() {
             </div>
             <h1 className="text-2xl font-semibold tracking-normal text-ink">RAG Docs Pipeline</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Index GitHub Markdown into pgvector and ask cited questions against the retrieved context.
+              Ask cited questions against the curated documentation index. Administrative ingestion,
+              source management, and analytics are no longer exposed from the public experience.
             </p>
           </div>
-
-          <form onSubmit={handleIngest} className="space-y-3">
-            <label htmlFor="repo" className="text-sm font-medium text-ink">
-              GitHub repository
-            </label>
-            <input
-              id="repo"
-              value={repoUrl}
-              onChange={(event) => setRepoUrl(event.target.value)}
-              className="w-full rounded-md border border-line bg-white px-3 py-2 text-sm outline-none ring-accent/20 focus:ring-4"
-            />
-            <button
-              type="submit"
-              disabled={busy !== null}
-              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy === "ingest" ? <Loader2 className="animate-spin" size={16} /> : <Github size={16} />}
-              Index repository
-            </button>
-          </form>
 
           {error ? (
             <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </div>
           ) : null}
-
-          <div className="mt-8 border-t border-line pt-6">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm font-medium text-ink">
-                <Clock3 size={16} aria-hidden="true" />
-                Query history
-              </div>
-              <button
-                type="button"
-                onClick={() => void loadHistory()}
-                disabled={historyBusy}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                aria-label="Refresh query history"
-              >
-                <RefreshCw size={15} className={historyBusy ? "animate-spin" : ""} />
-              </button>
-            </div>
-
-            {historyError ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                {historyError}
-              </div>
-            ) : null}
-
-            <div className="space-y-2">
-              {history.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => restoreHistoryItem(item)}
-                  className="block w-full rounded-md border border-line bg-white px-3 py-2 text-left hover:border-accent/50 hover:bg-slate-50"
-                >
-                  <span className="line-clamp-2 block text-sm font-medium leading-5 text-ink">
-                    {item.question}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    {new Intl.DateTimeFormat(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit"
-                    }).format(new Date(item.created_at))}
-                    {" · "}
-                    {item.latency_ms}ms
-                    {" · "}
-                    {item.retrieved_chunk_count} chunks
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            {!historyBusy && history.length === 0 && !historyError ? (
-              <p className="text-sm leading-6 text-slate-500">Recent answered questions will appear here.</p>
-            ) : null}
-          </div>
         </aside>
 
         <section className="flex min-h-screen flex-col">
@@ -262,7 +117,8 @@ export function ChatShell() {
                 <div className="mt-24 border-y border-line py-8">
                   <h2 className="text-xl font-semibold text-ink">Ask the indexed documentation</h2>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                    Start by indexing a repository, then ask implementation questions and inspect the cited chunks.
+                    Ask an implementation question and inspect the exact evidence returned by the
+                    retriever. If evidence is weak, the answer will refuse instead of guessing.
                   </p>
                 </div>
               ) : null}
@@ -276,12 +132,17 @@ export function ChatShell() {
                       : "rounded-md border border-line bg-white px-4 py-3 text-sm leading-6 text-slate-800"
                   }
                 >
+                  {message.insufficientEvidence ? (
+                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                      Insufficient evidence
+                    </div>
+                  ) : null}
                   <p className="whitespace-pre-wrap">{message.content}</p>
-                  {message.role === "assistant" && message.queryId ? (
+                  {message.role === "assistant" && message.eventId ? (
                     <div className="mt-3 flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => handleFeedback(index, message.queryId as number, 1)}
+                        onClick={() => handleFeedback(index, message.eventId as string, 1)}
                         className={
                           message.feedback === 1
                             ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700"
@@ -293,7 +154,7 @@ export function ChatShell() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleFeedback(index, message.queryId as number, -1)}
+                        onClick={() => handleFeedback(index, message.eventId as string, -1)}
                         className={
                           message.feedback === -1
                             ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700"
@@ -320,15 +181,15 @@ export function ChatShell() {
                       ) : null}
                     </div>
                   ) : null}
-                  {message.citations && message.citations.length > 0 ? (
+                  {message.evidence && message.evidence.length > 0 ? (
                     <div className="mt-4 space-y-2 border-t border-line pt-3">
-                      {message.citations.slice(0, 3).map((citation, citationIndex) => {
-                        const metadata = citationMetadata(citation);
+                      {message.evidence.slice(0, 3).map((evidence, evidenceIndex) => {
+                        const metadata = evidenceMetadata(evidence);
 
                         return (
                           <a
-                            key={citation.chunk_id}
-                            href={citation.source_url}
+                            key={`${evidence.citation_id ?? evidence.source_url}-${evidenceIndex}`}
+                            href={evidence.source_url}
                             target="_blank"
                             rel="noreferrer"
                             className="block rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-slate-600 hover:border-accent/50 hover:bg-white"
@@ -336,7 +197,7 @@ export function ChatShell() {
                             <span className="flex items-start justify-between gap-3">
                               <span className="min-w-0">
                                 <span className="block truncate font-medium text-ink">
-                                  [{citationIndex + 1}] {metadata.label}
+                                  [{evidence.citation_id ?? evidenceIndex + 1}] {metadata.label}
                                 </span>
                                 {metadata.detail ? (
                                   <span className="mt-1 block line-clamp-2">{metadata.detail}</span>
@@ -349,9 +210,7 @@ export function ChatShell() {
                               />
                             </span>
                             <span className="mt-2 block text-slate-500">
-                              {citation.score === null
-                                ? "text match"
-                                : `score ${citation.score.toFixed(3)}`}
+                              score {evidence.fused_score.toFixed(3)}
                             </span>
                           </a>
                         );
