@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Activity, DatabaseZap, Loader2, LockKeyhole, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import {
@@ -14,6 +14,7 @@ import type { AnalyticsSummary, DocSource, GithubIngestRequest, IngestResponse }
 type LoadState = "idle" | "loading" | "ready" | "error";
 
 export function AdminShell() {
+  const adminSessionId = useRef(0);
   const [secretInput, setSecretInput] = useState("");
   const [adminSecret, setAdminSecret] = useState<string | null>(null);
   const [sources, setSources] = useState<DocSource[]>([]);
@@ -31,6 +32,7 @@ export function AdminShell() {
   useEffect(() => {
     const secret = adminSecret;
     if (!secret) return;
+    const sessionId = adminSessionId.current;
 
     let cancelled = false;
 
@@ -43,13 +45,13 @@ export function AdminShell() {
           adminListSources(secret),
           adminGetAnalyticsSummary(secret)
         ]);
-        if (cancelled) return;
+        if (cancelled || !isActiveAdminSession(sessionId)) return;
 
         setSources(sourceResponse.items);
         setAnalytics(analyticsResponse);
         setLoadState("ready");
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || !isActiveAdminSession(sessionId)) return;
 
         setSources([]);
         setAnalytics(null);
@@ -65,6 +67,10 @@ export function AdminShell() {
     };
   }, [adminSecret]);
 
+  function isActiveAdminSession(sessionId: number): boolean {
+    return adminSessionId.current === sessionId;
+  }
+
   const locked = adminSecret === null;
   const secretReady = secretInput.trim().length > 0;
   const sourceFormReady = Boolean(repoUrl.trim() && branch.trim() && curatedPath.trim() && !syncing);
@@ -74,11 +80,13 @@ export function AdminShell() {
     const nextSecret = secretInput.trim();
     if (!nextSecret) return;
 
+    adminSessionId.current += 1;
     setAdminSecret(nextSecret);
     setSecretInput("");
   }
 
   function handleLogout() {
+    adminSessionId.current += 1;
     setAdminSecret(null);
     setSecretInput("");
     setSources([]);
@@ -96,7 +104,9 @@ export function AdminShell() {
 
   async function handleSync(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!adminSecret || !sourceFormReady) return;
+    const secret = adminSecret;
+    if (!secret || !sourceFormReady) return;
+    const sessionId = adminSessionId.current;
 
     const payload: GithubIngestRequest = {
       repo_url: repoUrl.trim(),
@@ -109,31 +119,58 @@ export function AdminShell() {
     setSyncError(null);
 
     try {
-      const result = await adminIngestGithub(adminSecret, payload);
+      const result = await adminIngestGithub(secret, payload);
+      if (!isActiveAdminSession(sessionId)) return;
+
       setSyncResult(result);
-      setSources((currentSources) => upsertSyncedSource(currentSources, result));
+
+      const [sourceResponse, analyticsResponse] = await Promise.all([
+        adminListSources(secret),
+        adminGetAnalyticsSummary(secret)
+      ]);
+      if (!isActiveAdminSession(sessionId)) return;
+
+      setSources(sourceResponse.items);
+      setAnalytics(analyticsResponse);
+      setLoadState("ready");
+      setLoadError(null);
     } catch (error) {
+      if (!isActiveAdminSession(sessionId)) return;
       setSyncError(errorMessage(error, "Não foi possível sincronizar a fonte."));
     } finally {
-      setSyncing(false);
+      if (isActiveAdminSession(sessionId)) {
+        setSyncing(false);
+      }
     }
   }
 
   async function handleToggleSource(source: DocSource) {
-    if (!adminSecret || updatingSourceId !== null) return;
+    const secret = adminSecret;
+    if (!secret || updatingSourceId !== null) return;
+    const sessionId = adminSessionId.current;
 
     setUpdatingSourceId(source.id);
     setLoadError(null);
 
     try {
-      const updatedSource = await adminUpdateSource(adminSecret, source.id, { enabled: !source.enabled });
+      const updatedSource = await adminUpdateSource(secret, source.id, { enabled: !source.enabled });
+      if (!isActiveAdminSession(sessionId)) return;
+
       setSources((currentSources) =>
         currentSources.map((currentSource) => (currentSource.id === updatedSource.id ? updatedSource : currentSource))
       );
+
+      const analyticsResponse = await adminGetAnalyticsSummary(secret);
+      if (!isActiveAdminSession(sessionId)) return;
+
+      setAnalytics(analyticsResponse);
     } catch (error) {
+      if (!isActiveAdminSession(sessionId)) return;
       setLoadError(errorMessage(error, "Não foi possível atualizar a fonte."));
     } finally {
-      setUpdatingSourceId(null);
+      if (isActiveAdminSession(sessionId)) {
+        setUpdatingSourceId(null);
+      }
     }
   }
 
@@ -415,21 +452,6 @@ function SyncResultCard({ result }: { result: IngestResponse }) {
 function sourceConfigString(source: DocSource, key: string): string | null {
   const value = source.source_config[key];
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function upsertSyncedSource(sources: DocSource[], result: IngestResponse): DocSource[] {
-  const syncedSource: DocSource = {
-    id: result.source_id,
-    source_type: "github",
-    source_config: { repo: result.repository, branch: result.branch, path: result.path },
-    last_sync: new Date().toISOString(),
-    enabled: true
-  };
-
-  if (sources.some((source) => source.id === result.source_id)) {
-    return sources.map((source) => (source.id === result.source_id ? { ...source, ...syncedSource } : source));
-  }
-  return [syncedSource, ...sources];
 }
 
 function formatDate(value: string | null): string {
