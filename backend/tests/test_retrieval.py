@@ -101,6 +101,28 @@ async def test_retrieve_chunks_can_filter_by_internal_source_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieve_chunks_casts_rrf_scoring_parameters_to_float() -> None:
+    session = FakeSession()
+
+    await retrieve_chunks(
+        session,
+        question="skip limit",
+        embedding=[0.1, 0.2],
+        top_k=3,
+        candidate_k=20,
+        rrf_k=60,
+        vector_weight=0.05,
+        text_weight=1.0,
+        source="github",
+    )
+
+    assert "CAST(:vector_weight AS double precision)" in session.statement
+    assert "CAST(:text_weight AS double precision)" in session.statement
+    assert "CAST(:rrf_k AS double precision)" in session.statement
+    assert "0.0" in session.statement
+
+
+@pytest.mark.asyncio
 async def test_retrieve_chunks_requires_more_candidates_than_results() -> None:
     with pytest.raises(ValueError, match="candidate_k must be greater than top_k"):
         await retrieve_chunks(
