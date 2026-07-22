@@ -1,4 +1,6 @@
+import logging
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import httpx
 import pytest
@@ -80,3 +82,39 @@ async def test_ready_returns_sanitized_not_ready_response_for_database_failure()
         "rag_docs",
     ):
         assert forbidden not in body
+
+
+async def test_ready_failure_log_does_not_include_user_controlled_request_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+    app.dependency_overrides[get_session] = lambda: FailingSession()
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    unsafe_request_id = "Bearer secret-token postgresql://rag:secret@db.internal SELECT 1"
+
+    with caplog.at_level(logging.WARNING, logger="app.services.readiness"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get(
+                "/api/ready",
+                headers={"X-Request-ID": unsafe_request_id},
+            )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert len(caplog.records) == 1
+
+    record = caplog.records[0]
+    logged_request_id = record.request_id
+    UUID(logged_request_id)
+    assert logged_request_id != unsafe_request_id
+    assert record.exception_class == "RuntimeError"
+
+    logged_content = f"{caplog.text} {logged_request_id}".lower()
+    for forbidden in (
+        "bearer",
+        "secret-token",
+        "postgresql://",
+        "select 1",
+        "db.internal",
+        "secret",
+    ):
+        assert forbidden not in logged_content

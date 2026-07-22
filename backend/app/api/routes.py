@@ -73,13 +73,23 @@ async def ready(
     response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> ReadinessResponse:
-    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    request_id = _readiness_request_id(request)
     readiness = ReadinessResponse.model_validate(
         await check_readiness(session, request_id=request_id)
     )
     if readiness.status != "ready":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return readiness
+
+
+def _readiness_request_id(request: Request) -> str:
+    request_id = request.headers.get("X-Request-ID")
+    if request_id:
+        try:
+            return str(UUID(request_id))
+        except ValueError:
+            pass
+    return str(uuid4())
 
 
 async def analytics_summary(
