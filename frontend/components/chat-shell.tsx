@@ -1,247 +1,329 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { Database, ExternalLink, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
-import { askDocs, Evidence, PublicQueryResponse, sendQueryFeedback } from "@/lib/api";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
+import { Database, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
+import { EvidencePanel } from "@/components/evidence-panel";
+import { askDocs, checkReadiness, sendQueryFeedback } from "@/lib/api";
+import type { Evidence, PublicQueryResponse, QueryFeedback, ReadinessResponse } from "@/lib/api";
 
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-  eventId?: string;
-  feedback?: -1 | 1;
-  evidence?: Evidence[];
-  latencyMs?: number;
-  retrievedChunkCount?: number;
-  insufficientEvidence?: boolean;
-};
+const readinessDelaysMs = [750, 1500, 3000];
+const refusalText =
+  "Não encontrei evidências suficientes na documentação indexada para responder com segurança.";
 
-function answerText(response: PublicQueryResponse) {
-  const sentences = response.answer?.sentences ?? [];
-  if (sentences.length > 0) {
-    return sentences.map((sentence) => sentence.text).join(" ");
-  }
-  return "I could not find enough evidence in the indexed documentation to answer safely.";
-}
-
-function evidenceMetadata(evidence: Evidence) {
-  const detail = [evidence.repository_path, evidence.section].filter(Boolean).join(" / ");
-
-  return {
-    detail,
-    label: evidence.title ?? evidence.repository_path ?? evidence.source_url
-  };
-}
+type ReadinessState = "checking" | "ready" | "blocked";
 
 export function ChatShell() {
-  const [question, setQuestion] = useState("How do I run FastAPI locally?");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [busy, setBusy] = useState<"query" | null>(null);
+  const [question, setQuestion] = useState("");
+  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
+  const [response, setResponse] = useState<PublicQueryResponse | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<QueryFeedback | null>(null);
+  const [readinessState, setReadinessState] = useState<ReadinessState>("checking");
+  const [readinessDetail, setReadinessDetail] = useState("Confirmando disponibilidade da API.");
+  const [readinessRun, setReadinessRun] = useState(0);
+  const [evidencePanelOpen, setEvidencePanelOpen] = useState(false);
+  const [panelEvidence, setPanelEvidence] = useState<Evidence[]>([]);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll(attempt: number) {
+      setReadinessState("checking");
+      setReadinessDetail("Acordando a API e validando o índice vetorial.");
+
+      try {
+        const readiness = await checkReadiness({ timeoutMs: 5000 });
+        if (cancelled) return;
+
+        if (isReady(readiness)) {
+          setReadinessState("ready");
+          setReadinessDetail("API pronta para consultas públicas.");
+          return;
+        }
+
+        scheduleNextPoll(attempt);
+      } catch (err) {
+        if (cancelled) return;
+        setReadinessDetail(err instanceof Error ? err.message : "Falha ao confirmar disponibilidade da API.");
+        scheduleNextPoll(attempt);
+      }
+    }
+
+    function scheduleNextPoll(attempt: number) {
+      const nextDelay = readinessDelaysMs[attempt];
+      if (nextDelay === undefined) {
+        setReadinessState("blocked");
+        setReadinessDetail("A API ainda não respondeu. Tente novamente para revalidar a disponibilidade.");
+        return;
+      }
+
+      timeoutId = setTimeout(() => {
+        void poll(attempt + 1);
+      }, nextDelay);
+    }
+
+    void poll(0);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [readinessRun]);
+
+  const canAsk = readinessState === "ready" && !busy;
+  const sentences = response?.answer?.sentences ?? [];
 
   async function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!question.trim()) return;
+    if (!canAsk || !question.trim()) return;
+
     const asked = question.trim();
-    setMessages((current) => [...current, { role: "user", content: asked }]);
     setQuestion("");
+    setSubmittedQuestion(asked);
+    setResponse(null);
+    setFeedback(null);
     setError(null);
-    setBusy("query");
+    setBusy(true);
+    setEvidencePanelOpen(false);
+
     try {
-      const response = await askDocs(asked);
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: answerText(response),
-          eventId: response.event_id,
-          evidence: response.evidence,
-          latencyMs: response.metrics.latency_ms,
-          retrievedChunkCount: response.metrics.retrieved_chunk_count,
-          insufficientEvidence: response.insufficient_evidence
-        }
-      ]);
+      const nextResponse = await askDocs(asked);
+      setResponse(nextResponse);
+
+      if (nextResponse.insufficient_evidence) {
+        openEvidencePanel(nextResponse.evidence, nextResponse.evidence[0]?.citation_id ?? null);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Query failed");
+      setError(err instanceof Error ? err.message : "Não foi possível consultar a documentação.");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
-  async function handleFeedback(messageIndex: number, eventId: string, feedback: -1 | 1) {
-    const currentFeedback = messages[messageIndex]?.feedback;
+  async function handleFeedback(nextFeedback: QueryFeedback) {
+    if (!response?.event_id) return;
 
-    setMessages((current) =>
-      current.map((message, index) =>
-        index === messageIndex ? { ...message, feedback } : message
-      )
-    );
+    const previousFeedback = feedback;
+    setFeedback(nextFeedback);
+    setError(null);
 
     try {
-      await sendQueryFeedback(eventId, feedback);
+      await sendQueryFeedback(response.event_id, nextFeedback);
     } catch (err) {
-      setMessages((current) =>
-        current.map((message, index) =>
-          index === messageIndex ? { ...message, feedback: currentFeedback } : message
-        )
-      );
-      setError(err instanceof Error ? err.message : "Feedback failed");
+      setFeedback(previousFeedback);
+      setError(err instanceof Error ? err.message : "Não foi possível registrar o feedback.");
     }
+  }
+
+  function openEvidencePanel(evidence: Evidence[], citationId: string | null) {
+    setPanelEvidence(evidence);
+    setSelectedEvidenceId(citationId);
+    setEvidencePanelOpen(true);
   }
 
   return (
-    <main className="min-h-screen bg-surface">
-      <div className="mx-auto grid min-h-screen max-w-7xl grid-cols-1 gap-0 lg:grid-cols-[360px_1fr]">
-        <aside className="border-b border-line bg-white p-6 lg:border-b-0 lg:border-r">
-          <div className="mb-8">
-            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-accent text-white">
+    <main className="min-h-screen bg-surface text-ink">
+      <div className="mx-auto grid min-h-screen max-w-7xl grid-cols-1 lg:grid-cols-[340px_1fr]">
+        <aside className="border-b border-line bg-white/90 p-6 lg:border-b-0 lg:border-r">
+          <div className="mb-7">
+            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-md bg-accent text-white shadow-sm shadow-teal-900/10">
               <Database size={20} aria-hidden="true" />
             </div>
-            <h1 className="text-2xl font-semibold tracking-normal text-ink">RAG Docs Pipeline</h1>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Ask cited questions against the curated documentation index. Administrative ingestion,
-              source management, and analytics are no longer exposed from the public experience.
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
+              Bancada de evidências
+            </p>
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-ink">RAG Docs Pipeline</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Faça uma pergunta sobre a documentação indexada e inspecione o trecho exato que sustenta
+              cada frase da resposta.
             </p>
           </div>
 
+          <section
+            aria-live="polite"
+            className="rounded-lg border border-line bg-slate-50 p-4 text-sm leading-6 text-slate-700"
+          >
+            <p className="font-medium text-ink">
+              {readinessState === "ready" ? "Pronto para consultar" : "Preparando consulta"}
+            </p>
+            <p className="mt-1">{readinessDetail}</p>
+            {readinessState === "blocked" ? (
+              <button
+                type="button"
+                onClick={() => setReadinessRun((current) => current + 1)}
+                className="mt-3 rounded-md border border-line bg-white px-3 py-2 text-sm font-medium text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+              >
+                Tentar novamente
+              </button>
+            ) : null}
+          </section>
+
           {error ? (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div
+              role="alert"
+              className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-700"
+            >
               {error}
             </div>
           ) : null}
         </aside>
 
         <section className="flex min-h-screen flex-col">
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="mx-auto flex max-w-3xl flex-col gap-4">
-              {messages.length === 0 ? (
-                <div className="mt-24 border-y border-line py-8">
-                  <h2 className="text-xl font-semibold text-ink">Ask the indexed documentation</h2>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                    Ask an implementation question and inspect the exact evidence returned by the
-                    retriever. If evidence is weak, the answer will refuse instead of guessing.
+          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
+            <div className="mx-auto flex max-w-3xl flex-col gap-5" aria-live="polite" aria-relevant="additions text">
+              {!submittedQuestion && !response ? (
+                <section className="mt-12 rounded-2xl border border-line bg-white p-6 shadow-sm shadow-slate-900/5 sm:mt-24 sm:p-8">
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
+                    Consulta pública
                   </p>
-                </div>
+                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink">
+                    Pergunte. Leia a resposta. Abra a prova.
+                  </h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                    As respostas são extrativas: cada frase aponta para uma citação própria, e a
+                    inspeção abre o recorte original da documentação.
+                  </p>
+                </section>
               ) : null}
 
-              {messages.map((message, index) => (
-                <article
-                  key={`${message.role}-${index}`}
-                  className={
-                    message.role === "user"
-                      ? "self-end rounded-md bg-accent px-4 py-3 text-sm leading-6 text-white"
-                      : "rounded-md border border-line bg-white px-4 py-3 text-sm leading-6 text-slate-800"
-                  }
-                >
-                  {message.insufficientEvidence ? (
-                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                      Insufficient evidence
-                    </div>
-                  ) : null}
-                  <p className="whitespace-pre-wrap">{message.content}</p>
-                  {message.role === "assistant" && message.eventId ? (
-                    <div className="mt-3 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleFeedback(index, message.eventId as string, 1)}
-                        className={
-                          message.feedback === 1
-                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700"
-                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
-                        }
-                        aria-label="Mark answer as helpful"
-                      >
-                        <ThumbsUp size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleFeedback(index, message.eventId as string, -1)}
-                        className={
-                          message.feedback === -1
-                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700"
-                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
-                        }
-                        aria-label="Mark answer as not helpful"
-                      >
-                        <ThumbsDown size={15} />
-                      </button>
-                    </div>
-                  ) : null}
-                  {message.role === "assistant" &&
-                  (message.latencyMs !== undefined || message.retrievedChunkCount !== undefined) ? (
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                      {message.latencyMs !== undefined ? (
-                        <span className="rounded-md bg-slate-100 px-2 py-1">
-                          {message.latencyMs}ms
-                        </span>
-                      ) : null}
-                      {message.retrievedChunkCount !== undefined ? (
-                        <span className="rounded-md bg-slate-100 px-2 py-1">
-                          {message.retrievedChunkCount} chunks
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {message.evidence && message.evidence.length > 0 ? (
-                    <div className="mt-4 space-y-2 border-t border-line pt-3">
-                      {message.evidence.slice(0, 3).map((evidence, evidenceIndex) => {
-                        const metadata = evidenceMetadata(evidence);
-
-                        return (
-                          <a
-                            key={`${evidence.citation_id ?? evidence.source_url}-${evidenceIndex}`}
-                            href={evidence.source_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-slate-600 hover:border-accent/50 hover:bg-white"
-                          >
-                            <span className="flex items-start justify-between gap-3">
-                              <span className="min-w-0">
-                                <span className="block truncate font-medium text-ink">
-                                  [{evidence.citation_id ?? evidenceIndex + 1}] {metadata.label}
-                                </span>
-                                {metadata.detail ? (
-                                  <span className="mt-1 block line-clamp-2">{metadata.detail}</span>
-                                ) : null}
-                              </span>
-                              <ExternalLink
-                                size={14}
-                                className="mt-0.5 shrink-0 text-slate-400"
-                                aria-hidden="true"
-                              />
-                            </span>
-                            <span className="mt-2 block text-slate-500">
-                              score {evidence.fused_score.toFixed(3)}
-                            </span>
-                          </a>
-                        );
-                      })}
-                    </div>
-                  ) : null}
+              {submittedQuestion ? (
+                <article className="self-end rounded-2xl bg-accent px-4 py-3 text-sm leading-6 text-white shadow-sm shadow-teal-900/10">
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-teal-50/80">
+                    Pergunta
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap">{submittedQuestion}</p>
                 </article>
-              ))}
+              ) : null}
+
+              {busy ? (
+                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-6 text-slate-700 shadow-sm shadow-slate-900/5">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="animate-spin text-accent" size={16} aria-hidden="true" />
+                    Consultando o índice e preparando citações...
+                  </div>
+                </article>
+              ) : null}
+
+              {response ? (
+                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-7 text-slate-800 shadow-sm shadow-slate-900/5 sm:px-5">
+                  <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-line pb-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
+                      Resposta extraída
+                    </p>
+                    {response.insufficient_evidence ? (
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+                        Evidência insuficiente
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-3">
+                    {sentences.length > 0 ? (
+                      sentences.map((sentence, sentenceIndex) => (
+                        <p
+                          key={`${response.event_id}-${sentence.citation_id}-${sentenceIndex}`}
+                          className="text-base leading-8 text-ink"
+                        >
+                          <span>{sentence.text}</span>{" "}
+                          <button
+                            type="button"
+                            onClick={() => openEvidencePanel(response.evidence, sentence.citation_id)}
+                            className="inline-flex translate-y-[-1px] items-center rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-xs font-semibold text-accent outline-none hover:border-accent/60 hover:bg-white focus-visible:ring-4 focus-visible:ring-accent/20"
+                            aria-label={`Inspecionar evidência ${sentence.citation_id}`}
+                          >
+                            [{sentence.citation_id}]
+                          </button>
+                        </p>
+                      ))
+                    ) : (
+                      <p className="text-base leading-8 text-ink">{refusalText}</p>
+                    )}
+                  </div>
+
+                  <div className="mt-5 flex items-center gap-2 border-t border-line pt-3">
+                    <span className="mr-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+                      Feedback
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleFeedback(1)}
+                      aria-label="Marcar resposta como útil"
+                      aria-pressed={feedback === 1}
+                      className={
+                        feedback === 1
+                          ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                          : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
+                      }
+                    >
+                      <ThumbsUp size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleFeedback(-1)}
+                      aria-label="Marcar resposta como não útil"
+                      aria-pressed={feedback === -1}
+                      className={
+                        feedback === -1
+                          ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700 outline-none focus-visible:ring-4 focus-visible:ring-red-200"
+                          : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
+                      }
+                    >
+                      <ThumbsDown size={15} aria-hidden="true" />
+                    </button>
+                  </div>
+                </article>
+              ) : null}
             </div>
           </div>
 
-          <form onSubmit={handleQuestion} className="border-t border-line bg-white p-4">
-            <div className="mx-auto flex max-w-3xl gap-3">
-              <textarea
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                rows={2}
-                className="min-h-12 flex-1 resize-none rounded-md border border-line px-3 py-2 text-sm outline-none ring-accent/20 focus:ring-4"
-              />
+          <form onSubmit={handleQuestion} className="border-t border-line bg-white/95 p-4">
+            <div className="mx-auto flex max-w-3xl flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex-1 text-sm font-medium text-ink" htmlFor="public-question">
+                Pergunta para a documentação
+                <textarea
+                  id="public-question"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  rows={2}
+                  disabled={!canAsk}
+                  placeholder={
+                    readinessState === "ready"
+                      ? "Ex.: Como executo o projeto localmente?"
+                      : "Aguarde a API ficar pronta para consultar."
+                  }
+                  className="mt-2 min-h-14 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm font-normal text-ink outline-none ring-accent/20 placeholder:text-slate-400 focus:ring-4 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                />
+              </label>
               <button
                 type="submit"
-                disabled={busy !== null}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-accent text-white disabled:cursor-not-allowed disabled:opacity-60"
-                aria-label="Send question"
+                disabled={!canAsk || !question.trim()}
+                className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-white outline-none shadow-sm shadow-teal-900/10 hover:bg-teal-800 focus-visible:ring-4 focus-visible:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                aria-label="Enviar pergunta"
               >
-                {busy === "query" ? <Loader2 className="animate-spin" size={18} /> : <SendHorizonal size={18} />}
+                {busy ? <Loader2 className="animate-spin" size={18} aria-hidden="true" /> : <SendHorizonal size={18} aria-hidden="true" />}
+                <span>Enviar</span>
               </button>
             </div>
           </form>
         </section>
       </div>
+
+      <EvidencePanel
+        open={evidencePanelOpen}
+        onOpenChange={setEvidencePanelOpen}
+        evidence={panelEvidence}
+        selectedId={selectedEvidenceId}
+      />
     </main>
   );
+}
+
+function isReady(readiness: ReadinessResponse) {
+  return readiness.status === "ready" && readiness.database === "ok" && readiness.pgvector === "ok";
 }
