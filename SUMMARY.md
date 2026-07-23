@@ -1,124 +1,136 @@
 # Project Summary
 
-## Project
+## Purpose
 
-`rag-docs-pipeline` is a personal portfolio RAG application for documentation. It indexes GitHub Markdown, stores versioned chunks and embeddings in PostgreSQL with pgvector, retrieves hybrid evidence, and returns cited answers or explicit insufficient-evidence refusals.
+`rag-docs-pipeline` is a portfolio RAG application for documentation QA. It ingests GitHub Markdown, stores versioned documents and chunks in PostgreSQL with pgvector, retrieves hybrid evidence, and returns citation-first answers or explicit insufficient-evidence refusals.
 
-The release target is the FastAPI Portuguese documentation source:
+The validated release target is the FastAPI Portuguese documentation corpus:
 
 - Repository: `https://github.com/fastapi/fastapi`
 - Branch: `master`
 - Path: `docs/pt/docs`
 - Evaluation dataset: `evaluation/pt-br/questions.jsonl`
 
-## Current Moment
+This summary reflects the final validated release branch state through `feature/portfolio-rag-release` commit `4139fc3`.
 
-Sprint 06 Tasks 1-4 delivered the portfolio release foundation: evaluation gate, protected admin, anonymous query events, readiness/logging/rate limiting, citation-first frontend, deployment manifests, and post-deploy smoke contract. Sprint 06 Task 5 refreshes stale documentation and the local verifier.
+## Current Release State
 
-## Implemented System
+- Backend: FastAPI monolith with public query/readiness endpoints and Bearer-protected admin endpoints.
+- Frontend: Next.js citation-first public chat and protected admin shell.
+- Database: PostgreSQL plus pgvector with versioned source snapshots and active-version retrieval.
+- Default answer mode: extractive answers only; external chat synthesis is not implemented.
+- Default embeddings: local deterministic embeddings; OpenAI embeddings are optional but not required for the first deploy.
+- Deployment target: Render backend, Vercel frontend, Neon-compatible PostgreSQL/pgvector.
+- Final release review status: focused follow-up reviews are clean after the final CORS validation fixes.
 
-### Backend
+## Backend Surface
 
-- FastAPI app with public `/api/health`, `/api/ready`, `/api/query`, and `/api/query-events/{uuid}/feedback`.
-- Bearer-protected `/api/admin/ingest/github`, `/api/admin/sources`, `/api/admin/sources/{id}`, and `/api/admin/analytics/summary`.
-- `ADMIN_SECRET` required in production.
-- Query, feedback, and sync rate limits.
-- Structured request logging with query event ID and evidence state context.
-- Readiness checks for database and pgvector.
-- GitHub client with timeout and retry/backoff for transient upstream failures.
-- Pydantic settings with explicit async `DATABASE_URL` and sync `MIGRATION_DATABASE_URL` validation.
-
-### Ingestion And Storage
-
-- `DocSource` tracks repository, branch, path, language, active version, sync time, and enabled state.
-- `SourceVersion` tracks immutable commit snapshots, embedding provider/model/dimensions, document count, and chunk count.
-- Documents are unique by source version and repository path.
-- Chunks store text, hash, metadata, pgvector embedding, and PostgreSQL full-text search vector.
-- Six Alembic migrations are present under `backend/alembic/versions`.
-
-### Retrieval And Answering
-
-- Local deterministic embeddings by default.
-- Optional OpenAI embeddings with configured API key, timeout, and retry/backoff.
-- Hybrid retrieval combines pgvector cosine search and PostgreSQL full-text search with reciprocal-rank fusion.
-- Retrieval excludes disabled sources and inactive source versions.
-- Extractive answer generation remains the default and only implemented LLM layer.
-- Answers include citation IDs and evidence items with repository path, section, excerpt, commit SHA, scores, and commit-pinned GitHub blob URLs.
-- Unsupported questions return `state="insufficient_evidence"`, no answer, and best available evidence.
-
-### Privacy
-
-The current privacy policy is intentionally narrow:
-
-- No persisted visitor question text.
-- No persisted answer text.
-- No persisted citation snapshot.
-- No persisted IP address or user agent.
-- No public query history.
-
-`query_events` stores only an opaque UUID, state, latency, retrieved chunk count, source IDs, source version IDs, top fused score, score gap, optional feedback, and timestamp.
-
-### Frontend
-
-- Next.js 16.2.11 frontend.
-- Citation-first public chat.
-- Evidence panel with commit-pinned links.
-- Feedback controls tied to opaque event UUIDs.
-- Protected admin shell for source ingestion and management.
-- Latest recorded Task 4 frontend validation: typecheck passed, production build passed, 22 Vitest tests passed, and `npm audit` was clean.
-
-### Deployment
-
-- `render.yaml` defines the Render backend service, Dockerfile, startup migration command, health path, and required environment variables.
-- `frontend/vercel.json` defines the Vercel Next.js build and requires `NEXT_PUBLIC_BACKEND_URL` from the provider environment.
-- `docs/environment.md` and `docs/deployment.md` document Neon-compatible runtime/migration database URL split.
-- `scripts/smoke.sh` validates frontend availability, backend health/readiness, answered public query, unsupported public query, and unauthenticated admin `401` without printing response bodies.
-
-## API Surface
-
-Public:
+Public API:
 
 - `GET /api/health`
 - `GET /api/ready`
 - `POST /api/query`
 - `PATCH /api/query-events/{uuid}/feedback`
 
-Admin:
+Admin API:
 
 - `POST /api/admin/ingest/github`
 - `GET /api/admin/sources`
 - `PATCH /api/admin/sources/{id}`
 - `GET /api/admin/analytics/summary`
 
-Ingestion, source management, analytics, and history are admin-only or absent from the public API in this release.
+Backend controls:
+
+- `ADMIN_SECRET` is required in production.
+- Query, feedback, and sync rate limits are separate.
+- Runtime `DATABASE_URL` must use `postgresql+asyncpg`.
+- Migration `MIGRATION_DATABASE_URL` must use `postgresql+psycopg`.
+- `EMBEDDING_DIMENSIONS` is locked to `1536` for the current fixed pgvector schema.
+- Production `ALLOWED_ORIGINS` must be explicitly set, exact, non-wildcard, non-local, and path/query/fragment-free.
+
+## Ingestion And Storage
+
+- `DocSource` identifies a source by repository, branch, and path.
+- `SourceVersion` stores immutable commit snapshots with embedding provider, model, dimensions, document count, and chunk count.
+- Active versions are promoted after successful synchronization; retained versions remain available for pruning and audit.
+- Documents are unique by source version and repository path.
+- Chunks store text, hash, metadata, pgvector embedding, and PostgreSQL full-text search vector.
+- The GitHub client uses API requests with optional Bearer auth for GitHub API endpoints and a separate unauthenticated client for `raw.githubusercontent.com` file downloads.
+
+## Retrieval And Answering
+
+- Retrieval combines pgvector cosine search and PostgreSQL full-text search with reciprocal-rank fusion.
+- Retrieval excludes disabled sources and inactive source versions.
+- Public query input is bounded server-side for `question` and `source`.
+- Extractive answer generation selects cited sentences from retrieved chunks.
+- Answered responses must include citation IDs that resolve to evidence items with commit-pinned GitHub blob URLs.
+- Unsupported questions return `state="insufficient_evidence"`, no answer, and best available evidence.
+- The evaluation gate now fails answerable cases that retrieve expected evidence but do not produce answered, cited sentences.
+
+## Privacy Contract
+
+The release privacy contract is intentionally strict:
+
+- Do not persist visitor questions.
+- Do not persist answer text.
+- Do not persist citation snapshots.
+- Do not persist public request bodies.
+- Do not persist IP addresses or user agents.
+- Do not retain request paths in application or Uvicorn access logs.
+- Do not expose public query history.
+
+`query_events` stores only opaque operational telemetry: UUID, state, latency, retrieved count, source IDs, source version IDs, top fused score, score gap, optional feedback, and timestamp.
+
+Additional privacy hardening:
+
+- Uvicorn access logs are disabled in Docker and Render commands.
+- Request-completion logs use operation names instead of route paths.
+- Public query SQLAlchemy failures return a generic `503` and log only sanitized error class names plus request ID.
+- Rollback failures in the public query error path are also sanitized.
+
+## Frontend Surface
+
+- Next.js 16.2.11 application.
+- Portuguese public UX for documentation questions.
+- Citation-first answer layout with sentence-level citation IDs.
+- Evidence panel shows commit-pinned source links.
+- Feedback controls use opaque event UUIDs.
+- Public question composer mirrors the backend maximum question length.
+- Admin shell keeps the Bearer secret in memory only.
+- Admin sync sends `max_files: 500` to support the approved FastAPI PT-BR corpus.
+- Admin source cards show active commit/version and active document/chunk counts.
+
+## Deployment
+
+- `render.yaml` defines the Render backend service, Dockerfile path, startup migration command, health path, free plan, and required secrets.
+- `backend/Dockerfile` runs Alembic migrations before Uvicorn and includes `--no-access-log`.
+- `frontend/vercel.json` requires `NEXT_PUBLIC_BACKEND_URL` from the Vercel provider environment before `npm run build`.
+- No deployable placeholder backend URL is committed in the Vercel manifest.
+- `docs/deployment.md` documents Render, Vercel, Neon TLS URL split, exact CORS origins, and smoke steps.
+- `scripts/smoke.sh` validates frontend availability, backend health/readiness, answered query, unsupported query refusal, and unauthenticated admin `401` without printing response bodies.
 
 ## Verification Evidence
 
-Latest recorded after Sprint 06 Task 5:
+Latest final verification from the release branch:
 
-- Backend broad suite: `273 passed`, with one existing Starlette warning.
-- Frontend: 22 Vitest tests, typecheck, build, and audit passed.
-- Evaluation: `answerable_top3=14/16`, `unsupported_refusals=4/4`, `answer_sentence_validation_failures=0`.
-- Docker runtime verification from Task 3 was blocked by Docker Hub metadata timeout.
-- Live deployed smoke remains pending deployed URLs.
+- `git diff --check`: passed.
+- `PYENV_VERSION=3.12.13 python -m ruff check backend`: passed.
+- `TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test PYENV_VERSION=3.12.13 python -m pytest backend/tests`: `315 passed`, one existing Starlette multipart pending-deprecation warning.
+- `npm --prefix frontend run typecheck`: passed.
+- `npm --prefix frontend run test:run`: `23 passed`.
+- `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm --prefix frontend run build`: passed.
+- `PYENV_VERSION=3.12.13 PYTHONPATH=backend python backend/scripts/evaluate_retrieval.py --dataset evaluation/pt-br/questions.jsonl --top-k 3 --output evaluation/pt-br/latest-report.json`: `Evaluation PASSED: answerable_top3=14/16, unsupported_refusals=4/4, answer_sentence_validation_failures=0`.
 
-Sprint 06 Task 5 verifier update:
+## Known Remaining Work
 
-- `backend/scripts/verify_pipeline.py` targets the FastAPI PT-BR docs source.
-- It checks the anonymous `query_events` table.
-- It validates source versions, active counts, no-op re-sync, anonymous query event schema, answered citation metadata, disabled-source exclusion, and source restoration.
+- Live deployed smoke is still pending real Vercel and Render origins plus smoke questions.
+- Docker runtime verification should be retried after the Docker Hub metadata timeout clears.
+- OpenAI embedding batching is not implemented.
+- External LLM synthesis is not implemented.
+- Local hash embeddings are deterministic and free but weaker than semantic embeddings.
+- There is no scheduled sync, worker queue, reranker, or non-GitHub connector.
 
-Commands:
-
-```bash
-git diff --check
-PYENV_VERSION=3.12.13 python -m ruff check backend
-PYENV_VERSION=3.12.13 python -m pytest backend/tests/test_verify_pipeline.py
-PYENV_VERSION=3.12.13 TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test python -m pytest backend/tests
-npm --prefix frontend run build
-```
-
-## Demo Commands
+## Useful Commands
 
 Local ingestion and verification:
 
@@ -143,12 +155,3 @@ SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
 SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
 scripts/smoke.sh
 ```
-
-## Current Limitations
-
-- Live deployed smoke has not run because real URLs were not provided.
-- Docker runtime verification should be retried after the Docker Hub metadata timeout clears.
-- OpenAI embedding batching is not implemented.
-- External LLM synthesis is not implemented; extractive answer mode is the only answer provider.
-- Local hash embeddings are deterministic and free but weaker than semantic embeddings.
-- There is no scheduled sync, worker queue, reranker, or non-GitHub connector.
