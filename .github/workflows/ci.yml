@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment containing smoke URLs and questions.
+        required: true
+        default: production
+        type: environment
 
 jobs:
   backend:
@@ -46,3 +53,17 @@ jobs:
         run: npm ci
       - working-directory: frontend
         run: npm run build
+
+  post-deploy-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/smoke.sh
+        env:
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          SMOKE_ANSWERABLE_QUESTION: ${{ secrets.SMOKE_ANSWERABLE_QUESTION }}
+          SMOKE_UNSUPPORTED_QUESTION: ${{ secrets.SMOKE_UNSUPPORTED_QUESTION }}

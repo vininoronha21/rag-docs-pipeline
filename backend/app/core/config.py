@@ -9,6 +9,7 @@ from sqlalchemy.exc import ArgumentError
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://rag:rag@localhost:5432/rag_docs"
 DEFAULT_MIGRATION_DATABASE_URL = "postgresql+psycopg://rag:rag@localhost:5432/rag_docs"
 FORBIDDEN_ASYNCPG_RUNTIME_QUERY_KEYS = frozenset({"channel_binding", "sslmode"})
+PGVECTOR_EMBEDDING_DIMENSIONS = 1536
 
 
 def _validate_database_driver(
@@ -133,6 +134,11 @@ class Settings(BaseSettings):
             self.migration_database_url,
             "postgresql+psycopg",
         )
+
+        if self.embedding_dimensions != PGVECTOR_EMBEDDING_DIMENSIONS:
+            raise ValueError(
+                "EMBEDDING_DIMENSIONS must remain 1536 for the current pgvector schema."
+            )
 
         if self.environment == "production" and not self.admin_secret.strip():
             raise ValueError("ADMIN_SECRET must be set when ENVIRONMENT=production.")

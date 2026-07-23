@@ -8,7 +8,7 @@ import pytest
 from fastapi import status
 
 from app.core.config import Settings, get_settings
-from app.db.models import DocSource
+from app.db.models import DocSource, SourceVersion
 from app.db.session import get_session
 from app.main import create_app
 
@@ -31,6 +31,16 @@ class FakeAdminSession:
             source_config={"repo": "example/project", "branch": "main", "path": "docs"},
             last_sync=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
             enabled=True,
+        )
+        self.source.active_version = SourceVersion(
+            id=8,
+            source_id=3,
+            commit_sha="a" * 40,
+            embedding_provider="local",
+            embedding_model="hash",
+            embedding_dimensions=1536,
+            document_count=2,
+            chunk_count=14,
         )
         self.committed = False
 
@@ -89,6 +99,10 @@ async def test_admin_sources_accepts_valid_bearer(app_client: httpx.AsyncClient)
             "source_config": {"repo": "example/project", "branch": "main", "path": "docs"},
             "last_sync": "2026-07-21T12:00:00Z",
             "enabled": True,
+            "active_version_id": 8,
+            "active_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "active_document_count": 2,
+            "active_chunk_count": 14,
         }
     ]
 
@@ -103,6 +117,8 @@ async def test_admin_analytics_accepts_valid_bearer(app_client: httpx.AsyncClien
     assert response.json() == {
         "document_count": 0,
         "chunk_count": 0,
+        "active_document_count": 0,
+        "active_chunk_count": 0,
         "source_count": 0,
         "enabled_source_count": 0,
         "query_count": 0,

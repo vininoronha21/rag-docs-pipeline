@@ -21,6 +21,7 @@ def test_query_completion_log_is_structured_and_redacted(
     query_secret = "QUERY-SECRET-5e6f7a"
     answer_secret = "ANSWER-SECRET-1b2c3d"
     excerpt_secret = "EXCERPT-SECRET-9e8d7c"
+    user_agent_secret = "USER-AGENT-SECRET-3f4a5b"
     unsafe_request_id = f"caller-controlled-{request_secret}"
     event_id = uuid4()
 
@@ -70,6 +71,7 @@ def test_query_completion_log_is_structured_and_redacted(
             f"/api/query?debug={query_secret}",
             headers={
                 "Authorization": f"Bearer {auth_secret}",
+                "User-Agent": f"privacy-check/{user_agent_secret}",
                 "X-Forwarded-For": "203.0.113.88",
                 "X-Request-ID": unsafe_request_id,
             },
@@ -85,7 +87,8 @@ def test_query_completion_log_is_structured_and_redacted(
     assert len(records) == 1
 
     log_event = json.loads(records[0].getMessage())
-    assert log_event["route"] == "/api/query"
+    assert log_event["operation"] == "query_docs"
+    assert "route" not in log_event
     assert log_event["status"] == status.HTTP_200_OK
     assert isinstance(log_event["duration_ms"], int | float)
     assert log_event["duration_ms"] >= 0
@@ -103,10 +106,12 @@ def test_query_completion_log_is_structured_and_redacted(
         answer_secret,
         excerpt_secret,
         unsafe_request_id,
+        user_agent_secret,
         "question",
         "Authorization",
         "Bearer",
         "203.0.113.88",
         "127.0.0.1",
+        "/api/query",
     ):
         assert forbidden not in serialized_log

@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException, status
 
 from app.api import routes
-from app.db.models import DocSource
+from app.db.models import DocSource, SourceVersion
 from app.schemas import DocSourceItem, DocSourceListResponse, DocSourceUpdateRequest
 from app.services.repositories import get_or_create_doc_source, update_doc_source_enabled
 
@@ -43,6 +43,12 @@ class FakeUpdateSession:
     async def get(self, model: type[DocSource], source_id: int) -> DocSource | None:
         assert model is DocSource
         if self.source is None or self.source.id != source_id:
+            return None
+        return self.source
+
+    async def scalar(self, statement: object) -> DocSource | None:
+        assert statement is not None
+        if self.source is None or self.source.id != 3:
             return None
         return self.source
 
@@ -121,6 +127,16 @@ async def test_doc_sources_route_returns_source_items(monkeypatch: pytest.Monkey
         last_sync=synced_at,
         enabled=True,
     )
+    source.active_version = SourceVersion(
+        id=8,
+        source_id=3,
+        commit_sha="a" * 40,
+        embedding_provider="local",
+        embedding_model="hash",
+        embedding_dimensions=1536,
+        document_count=2,
+        chunk_count=14,
+    )
 
     async def fake_list_doc_sources(session: object) -> list[DocSource]:
         assert session == "session"
@@ -138,6 +154,10 @@ async def test_doc_sources_route_returns_source_items(monkeypatch: pytest.Monkey
                 "source_config": {"repo": "example/project", "branch": "main", "path": ""},
                 "last_sync": synced_at,
                 "enabled": True,
+                "active_version_id": 8,
+                "active_commit_sha": "a" * 40,
+                "active_document_count": 2,
+                "active_chunk_count": 14,
             }
         ]
     )
@@ -182,6 +202,16 @@ async def test_update_doc_source_route_returns_updated_source(
         last_sync=synced_at,
         enabled=False,
     )
+    source.active_version = SourceVersion(
+        id=9,
+        source_id=3,
+        commit_sha="b" * 40,
+        embedding_provider="local",
+        embedding_model="hash",
+        embedding_dimensions=1536,
+        document_count=3,
+        chunk_count=21,
+    )
 
     async def fake_update_doc_source_enabled(
         session: object, *, source_id: int, enabled: bool
@@ -205,6 +235,10 @@ async def test_update_doc_source_route_returns_updated_source(
         source_config={"repo": "example/project", "branch": "main", "path": ""},
         last_sync=synced_at,
         enabled=False,
+        active_version_id=9,
+        active_commit_sha="b" * 40,
+        active_document_count=3,
+        active_chunk_count=21,
     )
     assert session.committed is True
 

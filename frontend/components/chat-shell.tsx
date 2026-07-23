@@ -8,6 +8,7 @@ import { askDocs, checkReadiness, sendQueryFeedback } from "@/lib/api";
 import type { Evidence, PublicQueryResponse, QueryFeedback, ReadinessResponse } from "@/lib/api";
 
 const readinessDelaysMs = [750, 1500, 3000];
+const publicQuestionMaxLength = 1000;
 const refusalText =
   "Não encontrei evidências suficientes na documentação indexada para responder com segurança.";
 
@@ -290,6 +291,7 @@ export function ChatShell() {
                   id="public-question"
                   value={question}
                   onChange={(event) => setQuestion(event.target.value)}
+                  maxLength={publicQuestionMaxLength}
                   rows={2}
                   disabled={!canAsk}
                   placeholder={

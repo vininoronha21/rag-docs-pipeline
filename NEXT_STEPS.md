@@ -2,195 +2,95 @@
 
 ## Working Principles
 
-- Keep the project simple and practical.
-- Backend first: database, integration, retrieval correctness, and tests.
-- Frontend work stays functional until the design sprint.
-- Avoid visual redesign, animations, and UI polish for now.
-- Prefer small, verified increments.
-- Update `README.md`, `SUMMARY.md`, and `NEXT_STEPS.md` when project direction or progress changes.
-- For each code change, provide a suggested commit message and a short explanation.
+- Preserve the small FastAPI monolith unless a real bottleneck justifies splitting services.
+- Keep public API surface narrow: health, readiness, query, and feedback only.
+- Keep administration Bearer-protected under `/api/admin/*`.
+- Do not persist visitor question text, answer text, citation snapshots, IP addresses, user agents, or public history.
+- Prefer evidence-driven retrieval changes over speculative tuning.
+- Do not commit real deployment URLs, provider secrets, smoke questions from production logs, or response bodies.
 
-## Completed: Pre-Opus Database Confidence Sprint (2026-07-03)
+## Completed In The Portfolio Release
 
-All items in this sprint are done.
+- Versioned GitHub ingestion with `DocSource` and immutable `SourceVersion` commit snapshots.
+- Same-commit ingestion no-op behavior.
+- Active-version corpus counts and source enable/disable filtering.
+- Hybrid retrieval using pgvector, PostgreSQL full-text search, and reciprocal-rank fusion.
+- Anonymous `QueryEvent` telemetry with opaque UUID, state, timing, source IDs, source version IDs, score summaries, retrieved count, optional feedback, and timestamp.
+- Public `/api/query` and `/api/query-events/{uuid}/feedback` with rate limits.
+- Bearer-protected `/api/admin/ingest/github`, `/api/admin/sources`, `/api/admin/sources/{id}`, and `/api/admin/analytics/summary`.
+- Public `/api/health` and `/api/ready` readiness checks.
+- Citation-first Next.js frontend and protected admin shell.
+- Evaluation dataset at `evaluation/pt-br/questions.jsonl`.
+- Render, Vercel, and environment documentation with explicit async/sync database URL split.
+- Post-deploy smoke script and manual workflow contract.
 
-Environment used:
+## Latest Release Evidence
 
-- Python 3.12.13 via pyenv
-- Docker 29.6.1, Docker Compose v5.1.4
-- PostgreSQL via `pgvector/pgvector:pg15` Docker Compose (Option A)
+- Backend broad suite from Task 5: `273 passed`, with one existing Starlette warning.
+- Frontend from Task 4: 22 Vitest tests, typecheck, build, and `npm audit` passed after Next 16.2.11.
+- Evaluation after Task 4: `answerable_top3=14/16`, `unsupported_refusals=4/4`, `answer_sentence_validation_failures=0`.
+- Sprint 06 Task 5 verifier focus: `backend/scripts/verify_pipeline.py` now targets FastAPI PT-BR docs and validates source versions, active counts, no-op sync, anonymous events, commit-pinned citations, disabled-source exclusion, and restoration in `finally` blocks.
 
-What passed:
+## Immediate Release Blockers
 
-- `python -m ruff check backend` — passed
-- `python -m pytest backend/tests` — 55/55 passed under Python 3.12.13
-- `alembic upgrade head` — 3 migrations applied cleanly
-- All expected tables confirmed: `documents`, `document_chunks`, `doc_sources`, `queries`, `alembic_version`
-- Ingest `tiangolo/fastapi` (5 files) — 5 documents, 82 chunks
-- Query "How do I run FastAPI locally?" — answer + 3 citations, 5 chunks, 42ms, query log persisted
-- Source disable filter — 0 chunks when disabled, source re-enabled
-- `PYTHONPATH=. python scripts/verify_pipeline.py` — all 6 checks passed
+1. Provision deployed URLs.
+   - Render backend URL and Vercel frontend URL are intentionally not committed.
+   - Set Render `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `ALLOWED_ORIGINS`, and generated/secret `ADMIN_SECRET` in the provider dashboard.
+   - Set Vercel `NEXT_PUBLIC_BACKEND_URL` to the Render backend URL.
 
-What was not tested in this sprint:
+2. Run post-deploy smoke.
+   - Supply deployed origins and smoke questions from a secure local shell or GitHub environment secrets.
+   - Run `scripts/smoke.sh` with `FRONTEND_URL`, `BACKEND_URL`, `SMOKE_ANSWERABLE_QUESTION`, and `SMOKE_UNSUPPORTED_QUESTION` supplied from a secure local shell or GitHub environment secrets.
 
-- Frontend build (not retried; previous sandbox failure appears environment-specific, not a regression)
-
-## Completed: External Provider Hardening Sprint (2026-07-03)
-
-Done. GitHub and OpenAI embedding calls are now resilient to transient failures.
-
-What shipped:
-
-- Shared `request_with_retry` helper in `app/services/http_retry.py` (exponential backoff; retries transient 429/5xx and `httpx.RequestError`).
-- `GithubClient` routes all requests through the helper and uses `HTTP_TIMEOUT_SECONDS`.
-- `OpenAIEmbeddingProvider` wraps its request in the helper and uses the configurable timeout.
-- New settings: `HTTP_TIMEOUT_SECONDS` (default 30.0), `HTTP_MAX_RETRIES` (default 2), `HTTP_RETRY_BACKOFF_SECONDS` (default 0.5).
-- 14 new mocked-HTTP unit tests (retry helper, GitHub retry, OpenAI embedding retry, config validation).
-
-Verification note:
-
-- Ruff passed on `backend`.
-- The 4 affected test files (27 tests, incl. 14 new) passed. The full 55+-test suite requires the project's Python 3.12.13 venv; this machine currently only has Python 3.14 without a C compiler, so `asyncpg`/`sqlalchemy` could not be installed here. Re-run the full suite in the 3.12.13 venv or CI to confirm no regressions.
-- Embedding batching was intentionally NOT added (defer until real ingestion runs justify it).
-
-## Immediate Priority
-
-External provider hardening is done. The next sprint is:
-
-```text
-Re-Ingestion And Retrieval Quality Review
-```
-
-## Current Recommended Order
-
-### 1. Re-Ingestion And Retrieval Quality Review
-
-Current state:
-
-- Documents are upserted by `source_url`.
-- Chunks have content hashes.
-- Existing chunks are deleted and recreated on document update.
-- Source identity tracks repo, branch, path, last sync, and enabled state.
-
-Next improvements:
-
-- Confirm repeated ingestion of the same repo/path behaves predictably.
-- Add tests around repeated ingestion.
-- Review `RETRIEVAL_MIN_SCORE` behavior with local and semantic embeddings.
-- Inspect real retrieved chunk text quality.
-- Tune chunk size and overlap only if real examples justify it.
-
-Acceptance criteria:
-
-- Re-ingesting the same source behaves predictably (no duplicate docs/chunks).
-- Retrieval quality is understood for at least one real documentation repo.
-
-### 2. Optional LLM Answer Provider
-
-Current state:
-
-- Answer generation is extractive.
-- `LLM_PROVIDER=openai` and `OPENAI_CHAT_MODEL` exist in settings but are not wired.
-
-Future step:
-
-- Add an optional LLM answer provider behind the existing extractive fallback.
-- Keep extractive mode as the default local/free mode.
-- Add prompt-injection safeguards before sending content to an external LLM.
-
-Acceptance criteria:
-
-- The app still works with no paid key (extractive mode).
-- External LLM mode is opt-in.
-- Prompt construction is tested.
-- Answer still returns citations.
-
-### 3. Frontend Functionality Before Design
-
-Do only if backend validation is stable:
-
-- Ingestion status.
-- Query history view.
-- Source management controls.
-- Citation preview details.
-- Empty indexed-database guidance.
-
-Do later in design sprint:
-
-- Visual redesign.
-- Dark mode direction.
-- Motion/animation work.
-- Detailed layout polish.
-
-### 4. Deployment Preparation
-
-Do after backend validation:
-
-- Document production environment variables.
-- Add notes for managed Postgres/pgvector options.
-- Add Render/Railway backend deployment notes.
-- Add Vercel frontend deployment notes.
-- Add CI checks for backend tests and lint.
+3. Retry Docker runtime verification.
+   - Task 3 Docker runtime verification was blocked by Docker Hub metadata timeout.
+   - Re-run when Docker Hub is reachable; do not treat the timeout as an application regression without a new reproduction.
 
 ## Verification Commands
 
-```bash
-# Toolchain check
-source .venv/bin/activate
-python -m ruff check backend
-python -m pytest backend/tests
+Run from the repository root:
 
-# Full pipeline verification
-docker compose up -d postgres
-cd backend
-alembic upgrade head
-PYTHONPATH=. python scripts/verify_pipeline.py
+```bash
+git diff --check
+PYENV_VERSION=3.12.13 python -m ruff check backend
+PYENV_VERSION=3.12.13 python -m pytest backend/tests/test_verify_pipeline.py
+PYENV_VERSION=3.12.13 TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test python -m pytest backend/tests
+npm --prefix frontend run build
 ```
 
-## Backlog
+Local full-pipeline verifier:
 
-### Backend
+```bash
+docker compose up -d postgres
+cd backend
+PYENV_VERSION=3.12.13 python -m alembic upgrade head
+PYENV_VERSION=3.12.13 PYTHONPATH=. python scripts/verify_pipeline.py
+```
 
-- Retry/backoff for GitHub and embedding providers. (done 2026-07-03)
-- Connection timeout configuration. (done 2026-07-03)
-- Optional embedding batching.
-- Optional LLM answer provider.
-- Stronger prompt-injection protections.
-- Re-ingestion behavior tests.
-- Better structured logging.
-- Lightweight seed/demo script.
+Post-deploy smoke template:
 
-### Retrieval And RAG
+```bash
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
+scripts/smoke.sh
+```
 
-- Real repository retrieval quality review.
-- Chunk size and overlap tuning from examples.
-- Minimum relevance threshold tuning.
-- Citation formatting improvements.
-- Optional reranking.
-- Better refusal behavior for weak context.
+## Backlog After Release
 
-### Frontend
+- Add OpenAI embedding batching only if ingestion runs show it matters.
+- Add an optional external LLM answer provider behind the extractive fallback.
+- Add scheduled sync or a worker queue only after manual/admin ingestion becomes a real bottleneck.
+- Add reranking if evaluation misses point to ranking rather than corpus/chunking issues.
+- Extend source connectors beyond GitHub Markdown.
+- Improve frontend visual design after the release contract is stable.
+- Add production observability beyond current structured request logs if deployed use justifies it.
 
-- Ingestion status.
-- Query history.
-- Source management.
-- Citation previews.
-- Empty state.
-- Later visual design system.
+## Do Not Do Yet
 
-### DevOps
-
-- CI for backend lint/tests.
-- Docker build validation.
-- Deployment notes.
-- Managed Postgres/pgvector notes.
-- Scheduled ingestion after MVP stability.
-
-## What Not To Do Yet
-
-- Do not build a complex multi-tenant system.
-- Do not add auth before deployment needs are clearer.
-- Do not redesign the frontend now.
-- Do not add heavy orchestration or queues before ingestion proves it needs them.
-- Do not replace the extractive fallback until external LLM mode is tested and optional.
-- Do not optimize for massive scale before the project has a stable personal-project MVP.
+- Do not make ingestion or source management public.
+- Do not add public query history.
+- Do not persist visitor content for debugging convenience.
+- Do not introduce multi-tenancy, billing, or account systems for this portfolio release.
+- Do not replace the extractive fallback until external LLM mode is implemented, tested, and optional.

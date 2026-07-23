@@ -1,137 +1,112 @@
-# RAG for Documentation — AI-Ready Data Pipeline
+# RAG for Documentation - AI-Ready Data Pipeline
 
-A personal, portfolio-oriented RAG pipeline that indexes GitHub Markdown documentation, stores chunks and embeddings in PostgreSQL with pgvector, and answers natural-language questions with cited retrieved context.
+Portfolio RAG application for GitHub Markdown documentation. It ingests versioned FastAPI PT-BR docs, chunks and embeds them, stores vectors in PostgreSQL with pgvector, retrieves with hybrid vector/full-text search, and answers public questions with citation-first, commit-pinned evidence.
 
-## Current Project Priorities
+## Current Release
 
-- Keep the scope simple and practical because this is a personal project.
-- Focus first on backend infrastructure, database integration, and test validation.
-- Keep frontend work limited to functionality and integration for now.
-- Postpone visual design decisions until the dedicated system design sprint.
+- Backend: FastAPI monolith with SQLAlchemy async, Alembic, PostgreSQL 15, pgvector, readiness checks, structured request logging, and in-memory rate limits.
+- Ingestion: GitHub Markdown under admin-only `/api/admin/ingest/github`, tracked by `DocSource` and immutable `SourceVersion` rows keyed by repository, branch, path, and commit SHA.
+- Retrieval: hybrid pgvector cosine search plus PostgreSQL full-text search, fused with reciprocal-rank fusion and filtered by enabled source/version and score thresholds.
+- Answers: local extractive fallback by default, citation-first response shape, prompt-injection-like chunk filtering, unsupported-question refusal via `state="insufficient_evidence"`.
+- Privacy: anonymous `query_events` only. The app does not persist visitor question text, answer text, citation snapshots, IP addresses, user agents, or public query history.
+- Frontend: Next.js 16.2.11 citation-first chat and protected admin shell. Latest recorded frontend checks from Task 4 passed typecheck, build, and 22 Vitest tests with `npm audit` clean.
+- Deployment: Render backend manifest, Vercel frontend manifest, Neon-compatible async/sync database URL split, and `scripts/smoke.sh` for post-deploy smoke checks.
 
-## Current Progress
+## Public And Admin API
 
-- Current branch: `dev`.
-- Latest local commit observed: `1def05a docs: record Database Confidence sprint results and add verify_pipeline.py`.
-- **Pre-Opus Database Confidence sprint completed on 2026-07-03.**
-- **External Provider Hardening sprint completed on 2026-07-03.** Retry/backoff and configurable timeouts added for GitHub and OpenAI embedding calls, with mocked-HTTP unit tests.
-- Full local RAG loop validated: ingest → persist → retrieve → query → citations → query log.
-- Backend lint (ruff) passes.
-- All 55 backend tests pass under Python 3.12.13 with pinned dependencies.
-- Alembic migrations applied cleanly (3 new migrations applied).
-- 5 documents and 82 chunks ingested from `tiangolo/fastapi`.
-- Query returned an answer with citations and logged 5 chunks in 42ms.
-- Source disable filter confirmed: disabled source returns 0 chunks.
-- Repeatable verification script added: `backend/scripts/verify_pipeline.py`.
+Public endpoints:
 
-## Stack
+- `GET /api/health`
+- `GET /api/ready`
+- `POST /api/query`
+- `PATCH /api/query-events/{uuid}/feedback`
 
-- Backend: FastAPI, SQLAlchemy, Alembic, PostgreSQL + pgvector
-- Pipeline: GitHub Markdown ingestion, Markdown cleaning, semantic chunking, embeddings, vector retrieval
-- Embeddings: local deterministic hash embeddings by default; OpenAI embeddings can be enabled by env vars
-- Frontend: Next.js, React, TailwindCSS
-- Infra: Docker Compose, GitHub Actions CI
+Bearer-protected admin endpoints:
 
-## Quick Start With Docker
+- `POST /api/admin/ingest/github`
+- `GET /api/admin/sources`
+- `PATCH /api/admin/sources/{id}`
+- `GET /api/admin/analytics/summary`
+
+There is no public ingestion endpoint, public source-management endpoint, or public query-history endpoint in the current release.
+
+## Local Demo
+
+Start PostgreSQL, install backend dependencies, migrate, and ingest the release corpus:
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up -d postgres
+PYENV_VERSION=3.12.13 python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd backend
+python -m alembic upgrade head
+PYTHONPATH=. python -m app.cli ingest-github \
+  https://github.com/fastapi/fastapi \
+  docs/pt/docs \
+  --branch master \
+  --max-files 500
+PYTHONPATH=. python scripts/verify_pipeline.py
+```
+
+Run the backend and frontend locally:
+
+```bash
+# terminal 1
+source .venv/bin/activate
+cd backend
+uvicorn app.main:app --reload
+
+# terminal 2
+npm --prefix frontend install
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm --prefix frontend run dev
 ```
 
 Open:
 
-- Frontend: http://localhost:3000
-- Backend health: http://localhost:8000/api/health
-- API docs: http://localhost:8000/docs
+- Frontend: `http://localhost:3000`
+- Backend health: `http://localhost:8000/api/health`
+- Backend readiness: `http://localhost:8000/api/ready`
+- API docs: `http://localhost:8000/docs`
 
-The backend container runs Alembic migrations on startup. The default embedding provider is local and deterministic, so no paid API key is required.
+## API Examples
 
-## Local Backend
-
-```bash
-PYENV_VERSION=3.12.13 python3 -m venv .venv   # use pyenv if python3.12 is not default
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-docker compose up -d postgres
-cd backend
-alembic upgrade head
-uvicorn app.main:app --reload
-```
-
-Useful CLI commands:
+Admin ingestion requires `Authorization: Bearer <ADMIN_SECRET>`:
 
 ```bash
-cd backend
-python -m app.cli ingest-github https://github.com/tiangolo/fastapi --max-files 25
-python -m app.cli query "How do I run FastAPI locally?" --source github
-```
-
-## Local Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Set `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000` when the backend is not running on the default URL.
-
-## API Flow
-
-1. `POST /api/ingest/github` indexes Markdown files from a GitHub repository.
-2. The backend cleans Markdown, chunks by headings and size, creates embeddings, and stores chunks in pgvector.
-3. `POST /api/query` embeds the question, retrieves top-k chunks by cosine distance, filters unsafe instruction-override text, and returns an extractive answer with citations and query metrics.
-4. `GET /api/sources` returns indexed document sources and their last sync time.
-5. `PATCH /api/sources/{source_id}` enables or disables an indexed source. Disabled linked sources are excluded from retrieval.
-6. `GET /api/analytics/summary` returns aggregate document, chunk, source, query, latency, and feedback metrics.
-7. `GET /api/queries` returns paginated query history with answers, citation ids, feedback, latency, retrieval counts, and timestamps.
-
-Example ingestion request:
-
-```bash
-curl -X POST http://localhost:8000/api/ingest/github \
+curl -X POST http://localhost:8000/api/admin/ingest/github \
+  -H "Authorization: Bearer $ADMIN_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"repo_url":"https://github.com/tiangolo/fastapi","max_files":25}'
+  -d '{"repo_url":"https://github.com/fastapi/fastapi","branch":"master","path":"docs/pt/docs","max_files":500}'
 ```
 
-Example query request:
+Public query:
 
 ```bash
 curl -X POST http://localhost:8000/api/query \
   -H "Content-Type: application/json" \
-  -d '{"question":"How do I run FastAPI locally?","top_k":5}'
+  -d '{"question":"Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?","top_k":5,"source":"github"}'
 ```
 
-Example query history request:
+Public feedback on the returned opaque event UUID:
 
 ```bash
-curl "http://localhost:8000/api/queries?limit=20&offset=0"
-```
-
-Example source list request:
-
-```bash
-curl http://localhost:8000/api/sources
-```
-
-Example source update request:
-
-```bash
-curl -X PATCH http://localhost:8000/api/sources/1 \
+curl -X PATCH http://localhost:8000/api/query-events/<event_uuid>/feedback \
   -H "Content-Type: application/json" \
-  -d '{"enabled":false}'
+  -d '{"feedback":1}'
 ```
 
-Example analytics summary request:
+Protected source list:
 
 ```bash
-curl http://localhost:8000/api/analytics/summary
+curl http://localhost:8000/api/admin/sources \
+  -H "Authorization: Bearer $ADMIN_SECRET"
 ```
 
 ## Configuration
 
-Environment variables are documented in `.env.example`.
+Environment variables are documented in `.env.example` and `docs/environment.md`.
 
 Default local mode:
 
@@ -139,64 +114,78 @@ Default local mode:
 EMBEDDING_PROVIDER=local
 LLM_PROVIDER=extractive
 RETRIEVAL_MIN_SCORE=0.0
+RETRIEVAL_MIN_FUSED_SCORE=0.0
+RETRIEVAL_MIN_SCORE_GAP=0.0
 ```
 
-`RETRIEVAL_MIN_SCORE` filters weak vector matches before answer generation. Increase it when the app should prefer saying no indexed documentation matched over answering from low-similarity chunks.
-
-External HTTP hardening (GitHub and OpenAI calls):
+Production requires explicit runtime and migration URLs with different SQLAlchemy drivers:
 
 ```bash
-HTTP_TIMEOUT_SECONDS=30.0        # connection/read timeout for external HTTP calls
-HTTP_MAX_RETRIES=2               # retry attempts for transient 429/5xx/network failures
-HTTP_RETRY_BACKOFF_SECONDS=0.5   # base seconds for exponential backoff between retries
+DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>/<database>?ssl=require
+MIGRATION_DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>/<database>?sslmode=require
 ```
 
-Transient GitHub and OpenAI embedding failures (429, 500, 502, 503, 504, and network errors) are retried with exponential backoff. Set `HTTP_MAX_RETRIES=0` to disable retries.
-
-OpenAI embeddings:
+OpenAI embeddings are optional:
 
 ```bash
 EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=...
+OPENAI_API_KEY=<set-in-provider-dashboard>
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-Keep `EMBEDDING_DIMENSIONS=1536` unless you also create a matching Alembic migration for the `document_chunks.embedding` vector column.
+`LLM_PROVIDER=openai` and `OPENAI_CHAT_MODEL` exist in settings, but external LLM synthesis is not implemented yet. Extractive mode remains the safe default.
 
 ## Verification
 
-```bash
-# Toolchain check
-source .venv/bin/activate
-python -m ruff check backend
-python -m pytest backend/tests
-
-# Full pipeline integration verification
-docker compose up -d postgres
-cd backend
-alembic upgrade head
-PYTHONPATH=. python scripts/verify_pipeline.py
-```
-
-`verify_pipeline.py` validates the complete loop: database connectivity, pgvector, table existence, ingest (5 files from `tiangolo/fastapi`), persistence counts, query with citations, and source disable behavior. All steps use local embeddings — no paid API key required.
-
-Latest local verification on 2026-07-03 (Pre-Opus Database Confidence sprint):
-
-- Environment: Python 3.12.13 via pyenv, Docker 29.6.1 with Docker Compose v5.1.4.
-- Database: Docker Compose `pgvector/pgvector:pg15`, Option A.
-- `python -m ruff check backend` → **passed**.
-- `python -m pytest backend/tests` → **55/55 passed** (Python 3.12.13, pinned deps).
-- `alembic upgrade head` → **3 migrations applied** cleanly.
-- Ingest: **5 documents, 82 chunks** from `tiangolo/fastapi`.
-- Query: answer with citations, **5 chunks retrieved in 42ms**, query log persisted.
-- Source disable: **0 chunks returned** when source is disabled.
-- `PYTHONPATH=. python scripts/verify_pipeline.py` → **all 6 checks passed**.
-
-Expected backend environment:
+Use these checks from the repository root:
 
 ```bash
-PYENV_VERSION=3.12.13 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-python -m pytest backend/tests
+git diff --check
+PYENV_VERSION=3.12.13 python -m ruff check backend
+PYENV_VERSION=3.12.13 python -m pytest backend/tests/test_verify_pipeline.py
+PYENV_VERSION=3.12.13 TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test python -m pytest backend/tests
+npm --prefix frontend run build
 ```
+
+Latest recorded release evidence after this docs refresh:
+
+- Backend broad suite from Task 5: `273 passed`, with one existing Starlette warning.
+- Frontend from Task 4: 22 Vitest tests, typecheck, build, and `npm audit` passed after Next 16.2.11.
+- Evaluation gate after Task 4: `answerable_top3=14/16`, `unsupported_refusals=4/4`, `answer_sentence_validation_failures=0` on `evaluation/pt-br/questions.jsonl`.
+- Alembic: six migration files are present under `backend/alembic/versions`.
+
+`backend/scripts/verify_pipeline.py` now validates the PT-BR FastAPI source (`https://github.com/fastapi/fastapi`, branch `master`, path `docs/pt/docs`), `SourceVersion` integrity, active corpus counts, same-commit no-op sync, answered citations with commit-pinned GitHub URLs, anonymous query-event schema, disabled-source exclusion, and source restoration in `finally` blocks.
+
+## Deployed Demo
+
+Do not commit deployed URLs or secrets. Configure provider environment values before deploying.
+
+Render backend:
+
+```bash
+# render.yaml defines the web service, Dockerfile, health check, and generated ADMIN_SECRET.
+# Set DATABASE_URL, MIGRATION_DATABASE_URL, and ALLOWED_ORIGINS in Render.
+```
+
+Vercel frontend:
+
+```bash
+# frontend/vercel.json defines the Next.js build.
+# Set NEXT_PUBLIC_BACKEND_URL in the Vercel project environment before building.
+```
+
+Post-deploy smoke:
+
+```bash
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
+scripts/smoke.sh
+```
+
+## Release Blockers
+
+- Live deployed smoke is still pending real `FRONTEND_URL` and `BACKEND_URL` values.
+- Docker runtime verification from Task 3 was blocked by Docker Hub metadata timeout; retry when Docker Hub is reachable.
+- OpenAI embedding batching and external LLM synthesis are intentionally deferred.
