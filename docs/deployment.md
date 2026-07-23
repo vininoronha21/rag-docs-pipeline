@@ -64,7 +64,7 @@ frontend directory.
 
 - Project root: `frontend`
 - Install command: `npm ci`
-- Build command: `test -n "$NEXT_PUBLIC_BACKEND_URL" || (printf 'NEXT_PUBLIC_BACKEND_URL must be set in the Vercel project environment.\n' >&2; exit 1); npm run build`
+- Build command: `if [ -z "$NEXT_PUBLIC_BACKEND_URL" ]; then printf 'NEXT_PUBLIC_BACKEND_URL must be set in the Vercel project environment.\n' >&2; exit 1; fi; npm run build`
 - Public backend URL: configure `NEXT_PUBLIC_BACKEND_URL` in the Vercel project environment.
 
 Set `NEXT_PUBLIC_BACKEND_URL` before building. It is public and is baked into

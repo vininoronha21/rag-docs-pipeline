@@ -85,7 +85,8 @@ def test_query_completion_log_is_structured_and_redacted(
     assert len(records) == 1
 
     log_event = json.loads(records[0].getMessage())
-    assert log_event["route"] == "/api/query"
+    assert log_event["operation"] == "query_docs"
+    assert "route" not in log_event
     assert log_event["status"] == status.HTTP_200_OK
     assert isinstance(log_event["duration_ms"], int | float)
     assert log_event["duration_ms"] >= 0
@@ -108,5 +109,6 @@ def test_query_completion_log_is_structured_and_redacted(
         "Bearer",
         "203.0.113.88",
         "127.0.0.1",
+        "/api/query",
     ):
         assert forbidden not in serialized_log

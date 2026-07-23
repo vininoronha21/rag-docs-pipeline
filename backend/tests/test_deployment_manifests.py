@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +81,37 @@ def test_vercel_manifest_requires_provider_backend_url_without_committed_placeho
     assert "npm run build" in vercel["buildCommand"]
     assert "env" not in vercel or "NEXT_PUBLIC_BACKEND_URL" not in vercel.get("env", {})
     assert "your-render-service" not in manifest
+
+
+def test_vercel_build_command_fails_before_build_when_backend_url_is_missing(
+    tmp_path: Path,
+) -> None:
+    vercel = json.loads(_read("frontend/vercel.json"))
+    sentinel = tmp_path / "npm-called"
+    fake_npm = tmp_path / "npm"
+    fake_npm.write_text(
+        "#!/bin/sh\n"
+        "printf called > \"$NPM_SENTINEL\"\n"
+        "exit 0\n"
+    )
+    fake_npm.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("NEXT_PUBLIC_BACKEND_URL", None)
+    env["PATH"] = str(tmp_path)
+    env["NPM_SENTINEL"] = str(sentinel)
+
+    result = subprocess.run(
+        ["/bin/sh", "-c", vercel["buildCommand"]],
+        cwd=ROOT / "frontend",
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "NEXT_PUBLIC_BACKEND_URL must be set" in result.stderr
+    assert not sentinel.exists()
 
 
 def test_deployment_docs_cover_neon_tls_migrations_vercel_root_and_exact_cors() -> None:
