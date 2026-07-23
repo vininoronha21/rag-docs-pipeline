@@ -114,6 +114,18 @@ function insufficientResponse(): PublicQueryResponse {
   };
 }
 
+function answeredButEmptyResponse(): PublicQueryResponse {
+  return {
+    event_id: "550e8400-e29b-41d4-a716-446655440002",
+    state: "answered",
+    answered: true,
+    insufficient_evidence: false,
+    answer: { sentences: [] },
+    evidence: [evidenceRecords[0]],
+    metrics: { latency_ms: 12, retrieved_chunk_count: 1, top_fused_score: 0.4, score_gap: null }
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -274,6 +286,36 @@ describe("ChatShell", () => {
       await screen.findByText("Não encontrei evidências suficientes na documentação indexada para responder com segurança.")
     ).toBeVisible();
     expect(await screen.findByRole("dialog", { name: "Evidência para citação c1" })).toBeVisible();
+  });
+
+  test("shows the refusal badge and copy only for insufficient evidence, with no feedback controls", async () => {
+    askDocsMock.mockResolvedValueOnce(insufficientResponse());
+    render(<ChatShell />);
+
+    await submitQuestion("Existe suporte a billing?");
+
+    expect(
+      await screen.findByText(
+        "Não encontrei evidências suficientes na documentação indexada para responder com segurança."
+      )
+    ).toBeVisible();
+    expect(screen.getByText("Evidência insuficiente")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como útil" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como não útil" })).not.toBeInTheDocument();
+  });
+
+  test("treats an answered response with no sentences as a refusal", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredButEmptyResponse());
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    expect(
+      await screen.findByText(
+        "Não encontrei evidências suficientes na documentação indexada para responder com segurança."
+      )
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como útil" })).not.toBeInTheDocument();
   });
 
   test("rolls back optimistic UUID feedback when the public feedback request fails", async () => {

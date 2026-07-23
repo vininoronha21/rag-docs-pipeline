@@ -79,6 +79,7 @@ export function ChatShell() {
 
   const canAsk = readinessState === "ready" && !busy;
   const sentences = response?.answer?.sentences ?? [];
+  const isRefusal = response !== null && (response.insufficient_evidence || sentences.length === 0);
 
   async function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -217,7 +218,7 @@ export function ChatShell() {
                     <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
                       Resposta extraída
                     </p>
-                    {response.insufficient_evidence ? (
+                    {isRefusal ? (
                       <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
                         Evidência insuficiente
                       </span>
@@ -225,7 +226,7 @@ export function ChatShell() {
                   </div>
 
                   <div className="space-y-3">
-                    {sentences.length > 0 ? (
+                    {!isRefusal ? (
                       sentences.map((sentence, sentenceIndex) => (
                         <p
                           key={`${response.event_id}-${sentence.citation_id}-${sentenceIndex}`}
@@ -247,37 +248,39 @@ export function ChatShell() {
                     )}
                   </div>
 
-                  <div className="mt-5 flex items-center gap-2 border-t border-line pt-3">
-                    <span className="mr-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
-                      Feedback
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void handleFeedback(1)}
-                      aria-label="Marcar resposta como útil"
-                      aria-pressed={feedback === 1}
-                      className={
-                        feedback === 1
-                          ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
-                          : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
-                      }
-                    >
-                      <ThumbsUp size={15} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleFeedback(-1)}
-                      aria-label="Marcar resposta como não útil"
-                      aria-pressed={feedback === -1}
-                      className={
-                        feedback === -1
-                          ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700 outline-none focus-visible:ring-4 focus-visible:ring-red-200"
-                          : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
-                      }
-                    >
-                      <ThumbsDown size={15} aria-hidden="true" />
-                    </button>
-                  </div>
+                  {response && !isRefusal ? (
+                    <div className="mt-5 flex items-center gap-2 border-t border-line pt-3">
+                      <span className="mr-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+                        Feedback
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleFeedback(1)}
+                        aria-label="Marcar resposta como útil"
+                        aria-pressed={feedback === 1}
+                        className={
+                          feedback === 1
+                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
+                        }
+                      >
+                        <ThumbsUp size={15} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleFeedback(-1)}
+                        aria-label="Marcar resposta como não útil"
+                        aria-pressed={feedback === -1}
+                        className={
+                          feedback === -1
+                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700 outline-none focus-visible:ring-4 focus-visible:ring-red-200"
+                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
+                        }
+                      >
+                        <ThumbsDown size={15} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ) : null}
             </div>
