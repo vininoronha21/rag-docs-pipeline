@@ -100,6 +100,10 @@ def test_production_rejects_empty_allowed_origins() -> None:
         "https://docs.example.com/path",
         "https://docs.example.com?preview=1",
         "http://[::1]:3000",
+        "http://localhost.:3000",
+        "https://*.example.com",
+        "https://user:pass@example.com",
+        "https://example.com:bad",
     ],
 )
 def test_production_rejects_invalid_allowed_origin_shapes(origin: str) -> None:

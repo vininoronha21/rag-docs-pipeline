@@ -45,9 +45,14 @@ def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
 
     for origin in allowed_origins:
         parsed = urlparse(origin.strip())
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("ALLOWED_ORIGINS must contain valid origin ports.") from exc
         if (
             not origin.strip()
             or origin != origin.strip()
+            or "*" in origin
             or not parsed.scheme
             or not parsed.netloc
             or parsed.path
@@ -55,13 +60,15 @@ def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
             or parsed.query
             or parsed.fragment
             or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
         ):
             raise ValueError(
                 "ALLOWED_ORIGINS must contain exact origins without paths, "
                 "queries, or fragments when ENVIRONMENT=production."
             )
 
-        if origin.strip() == "*" or _is_loopback_hostname(parsed.hostname):
+        if _is_loopback_hostname(parsed.hostname):
             raise ValueError(
                 "ALLOWED_ORIGINS must not include wildcard or localhost origins "
                 "when ENVIRONMENT=production."
@@ -69,10 +76,11 @@ def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
 
 
 def _is_loopback_hostname(hostname: str) -> bool:
-    if hostname.lower() == "localhost":
+    normalized_hostname = hostname.rstrip(".").lower()
+    if normalized_hostname == "localhost":
         return True
     try:
-        return ip_address(hostname).is_loopback
+        return ip_address(normalized_hostname).is_loopback
     except ValueError:
         return False
 
