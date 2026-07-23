@@ -1,12 +1,16 @@
+import json
+import logging
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.observability import get_request_id, set_query_log_context
 from app.core.rate_limit import InMemoryRateLimiter
+from app.db.models import DocSource
 from app.db.session import get_session
 from app.schemas import (
     AnalyticsSummaryResponse,
@@ -44,6 +48,7 @@ from app.services.repositories import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 query_rate_limit = InMemoryRateLimiter(
     max_requests=get_settings().query_rate_limit_per_minute,
@@ -90,6 +95,8 @@ async def analytics_summary(
     return AnalyticsSummaryResponse(
         document_count=summary.document_count,
         chunk_count=summary.chunk_count,
+        active_document_count=summary.active_document_count,
+        active_chunk_count=summary.active_chunk_count,
         source_count=summary.source_count,
         enabled_source_count=summary.enabled_source_count,
         query_count=summary.query_count,
@@ -193,16 +200,7 @@ def _embedding_provider_exception(exc: EmbeddingProviderError) -> HTTPException:
 async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
     sources = await list_doc_sources(session)
     return DocSourceListResponse(
-        items=[
-            DocSourceItem(
-                id=source.id,
-                source_type=source.source_type,
-                source_config=source.source_config,
-                last_sync=source.last_sync,
-                enabled=source.enabled,
-            )
-            for source in sources
-        ]
+        items=[_doc_source_item(source) for source in sources]
     )
 
 
@@ -222,12 +220,21 @@ async def update_doc_source(
             detail="Document source not found.",
         )
     await session.commit()
+    return _doc_source_item(source)
+
+
+def _doc_source_item(source: DocSource) -> DocSourceItem:
+    active_version = source.active_version
     return DocSourceItem(
         id=source.id,
         source_type=source.source_type,
         source_config=source.source_config,
         last_sync=source.last_sync,
         enabled=source.enabled,
+        active_version_id=active_version.id if active_version is not None else None,
+        active_commit_sha=active_version.commit_sha if active_version is not None else None,
+        active_document_count=active_version.document_count if active_version is not None else None,
+        active_chunk_count=active_version.chunk_count if active_version is not None else None,
     )
 
 
@@ -255,6 +262,25 @@ async def query_docs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except SQLAlchemyError as exc:
+        rollback_error: str | None = None
+        try:
+            await session.rollback()
+        except Exception as rollback_exc:
+            rollback_error = rollback_exc.__class__.__name__
+        event = {
+            "event": "public_query_database_error",
+            "error": exc.__class__.__name__,
+        }
+        if rollback_error is not None:
+            event["rollback_error"] = rollback_error
+        if request is not None:
+            event["request_id"] = get_request_id(request)
+        logger.warning(json.dumps(event, sort_keys=True, separators=(",", ":")))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Query service is temporarily unavailable. Try again later.",
+        ) from None
     citation_ids = {
         item.chunk_id: item.citation_id
         for item in result.evidence

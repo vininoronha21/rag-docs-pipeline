@@ -4,6 +4,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
 
+MAX_QUERY_QUESTION_LENGTH = 1000
+MAX_QUERY_SOURCE_LENGTH = 128
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -54,6 +57,10 @@ class DocSourceItem(BaseModel):
     source_config: dict[str, Any]
     last_sync: datetime | None
     enabled: bool
+    active_version_id: int | None = None
+    active_commit_sha: str | None = None
+    active_document_count: int | None = None
+    active_chunk_count: int | None = None
 
 
 class DocSourceListResponse(BaseModel):
@@ -67,6 +74,8 @@ class DocSourceUpdateRequest(BaseModel):
 class AnalyticsSummaryResponse(BaseModel):
     document_count: int
     chunk_count: int
+    active_document_count: int
+    active_chunk_count: int
     source_count: int
     enabled_source_count: int
     query_count: int
@@ -76,9 +85,9 @@ class AnalyticsSummaryResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    question: str = Field(min_length=2)
+    question: str = Field(min_length=2, max_length=MAX_QUERY_QUESTION_LENGTH)
     top_k: int = Field(default=5, ge=1, le=12)
-    source: str | None = None
+    source: str | None = Field(default=None, max_length=MAX_QUERY_SOURCE_LENGTH)
 
 
 class AnswerSentence(BaseModel):

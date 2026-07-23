@@ -13,6 +13,8 @@ import type { AnalyticsSummary, DocSource, GithubIngestRequest, IngestResponse }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
+const curatedSourceMaxFiles = 500;
+
 export function AdminShell() {
   const adminSessionId = useRef(0);
   const [secretInput, setSecretInput] = useState("");
@@ -111,7 +113,8 @@ export function AdminShell() {
     const payload: GithubIngestRequest = {
       repo_url: repoUrl.trim(),
       branch: branch.trim(),
-      path: curatedPath.trim()
+      path: curatedPath.trim(),
+      max_files: curatedSourceMaxFiles
     };
 
     setSyncing(true);
@@ -367,8 +370,8 @@ export function AdminShell() {
 
 function MetricsGrid({ analytics, loading }: { analytics: AnalyticsSummary | null; loading: boolean }) {
   const metrics = [
-    { label: "documentos", value: analytics?.document_count ?? 0 },
-    { label: "chunks", value: analytics?.chunk_count ?? 0 },
+    { label: "documentos ativos", value: analytics?.active_document_count ?? 0 },
+    { label: "chunks ativos", value: analytics?.active_chunk_count ?? 0 },
     { label: "fontes", value: analytics?.source_count ?? 0 },
     { label: "fontes ativas", value: analytics?.enabled_source_count ?? 0 },
     { label: "consultas", value: analytics?.query_count ?? 0 }
@@ -422,6 +425,18 @@ function SourceCard({ source, updating, onToggle }: { source: DocSource; updatin
         </span>
       </div>
       <p className="mt-3 text-xs text-slate-500">Última sincronização: {formatDate(source.last_sync)}</p>
+      {source.active_commit_sha ? (
+        <div className="mt-3 rounded-lg border border-line bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+          <p className="font-medium text-ink">Commit ativo: {source.active_commit_sha}</p>
+          <p>
+            versão #{source.active_version_id} · {formatNumber(source.active_document_count ?? 0)} documentos · {formatNumber(source.active_chunk_count ?? 0)} chunks
+          </p>
+        </div>
+      ) : (
+        <p className="mt-3 rounded-lg border border-dashed border-line bg-white px-3 py-2 text-xs text-slate-500">
+          Sem versão ativa indexada.
+        </p>
+      )}
       <button
         type="button"
         onClick={onToggle}

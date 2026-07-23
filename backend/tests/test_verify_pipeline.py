@@ -3,10 +3,10 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import pytest
-from scripts import verify_pipeline
 
-from app.db.models import DocSource, SourceVersion
+from app.db.models import DocSource, QueryEvent, SourceVersion
 from app.services.pipeline import GithubIngestionResult, IngestedDocumentResult
+from scripts import verify_pipeline
 
 
 class ScalarResult:
@@ -23,6 +23,14 @@ class ScalarResult:
         return list(self.value)
 
 
+class TableResult:
+    def __init__(self, tables: set[str]) -> None:
+        self.tables = tables
+
+    def fetchall(self) -> list[tuple[str]]:
+        return [(table,) for table in self.tables]
+
+
 class FakeSession:
     def __init__(
         self,
@@ -30,11 +38,13 @@ class FakeSession:
         objects: dict[type[Any], Any] | None = None,
         documents: list[Any] | None = None,
         chunk_count: int = 0,
+        tables: set[str] | None = None,
     ) -> None:
         self.objects = objects or {}
         self.documents = documents or []
         self.chunk_count = chunk_count
-        self.requested_ids: list[tuple[type[Any], int]] = []
+        self.tables = tables or set()
+        self.requested_ids: list[tuple[type[Any], Any]] = []
 
     async def __aenter__(self) -> "FakeSession":
         return self
@@ -42,12 +52,15 @@ class FakeSession:
     async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def get(self, model: type[Any], object_id: int) -> Any:
+    async def get(self, model: type[Any], object_id: Any) -> Any:
         self.requested_ids.append((model, object_id))
         return self.objects.get(model)
 
     async def scalars(self, statement: object) -> ScalarResult:
         return ScalarResult(self.documents)
+
+    async def execute(self, statement: object) -> TableResult:
+        return TableResult(self.tables)
 
     async def scalar(self, statement: object) -> int:
         return self.chunk_count
@@ -82,6 +95,62 @@ def ingestion_result(
     )
 
 
+def anonymous_event(event_id: Any, **overrides: Any) -> SimpleNamespace:
+    fields = {
+        "id": event_id,
+        "state": "answered",
+        "latency_ms": 1,
+        "retrieved_chunk_count": 1,
+        "source_ids": [3],
+        "source_version_ids": [7],
+        "top_fused_score": 0.91,
+        "score_gap": 0.2,
+        "feedback": None,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def answered_query_result(event_id: Any, **overrides: Any) -> SimpleNamespace:
+    commit_sha = "a" * 40
+    fields = {
+        "event_id": event_id,
+        "state": "answered",
+        "answer": SimpleNamespace(
+            sentences=[
+                SimpleNamespace(text="Use fastapi dev with the application path.", chunk_id=3)
+            ]
+        ),
+        "evidence": [
+            SimpleNamespace(
+                citation_id="citation-1",
+                supported_text="Use fastapi dev with the application path.",
+                excerpt="fastapi dev main.py starts the local development server.",
+                title="Primeiros passos",
+                repository_path="docs/pt/docs/tutorial/first-steps.md",
+                section="`fastapi dev` com path ou com a opção de CLI `--entrypoint`",
+                commit_sha=commit_sha,
+                source_url=(
+                    "https://github.com/example/project/blob/"
+                    f"{commit_sha}/docs/pt/docs/tutorial/first-steps.md"
+                ),
+                vector_score=0.88,
+                text_score=0.74,
+                fused_score=0.91,
+                chunk_id=3,
+            )
+        ],
+        "metrics": SimpleNamespace(
+            retrieved_chunk_count=1,
+            latency_ms=1,
+            top_fused_score=0.91,
+            score_gap=0.2,
+        ),
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
 def target_session(*, enabled: bool = True) -> FakeSession:
     source = SimpleNamespace(
         id=3,
@@ -104,6 +173,32 @@ def target_session(*, enabled: bool = True) -> FakeSession:
         documents=[document],
         chunk_count=2,
     )
+
+
+def test_verifier_targets_portfolio_pt_br_demo_corpus() -> None:
+    assert verify_pipeline.VERIFY_REPO_URL == "https://github.com/fastapi/fastapi"
+    assert getattr(verify_pipeline, "VERIFY_BRANCH", None) == "master"
+    assert verify_pipeline.VERIFY_PATH == "docs/pt/docs"
+    assert "fastapi dev" in verify_pipeline.VERIFY_QUESTION
+
+
+@pytest.mark.asyncio
+async def test_verify_tables_exist_uses_anonymous_query_events_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession(
+        tables={
+            "documents",
+            "document_chunks",
+            "doc_sources",
+            "source_versions",
+            "query_events",
+            "alembic_version",
+        }
+    )
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+
+    assert await verify_pipeline.verify_tables_exist() is True
 
 
 @pytest.mark.asyncio
@@ -192,12 +287,32 @@ async def test_verify_ingest_requires_no_op_with_same_target_counts(
     monkeypatch.setattr(verify_pipeline, "ingest_github_repository", fake_ingest)
     monkeypatch.setattr(verify_pipeline, "verify_persistence", fake_verify_persistence)
 
-    ok, target = await verify_pipeline.verify_ingest(object(), object())
+    settings = object()
+    embeddings = object()
+
+    ok, target = await verify_pipeline.verify_ingest(settings, embeddings)
 
     assert ok is True
     assert target is second
     assert persisted == [first, second]
-    assert len(calls) == 2
+    assert calls == [
+        {
+            "settings": settings,
+            "embeddings": embeddings,
+            "repo_url": "https://github.com/fastapi/fastapi",
+            "branch": "master",
+            "path": "docs/pt/docs",
+            "max_files": verify_pipeline.VERIFY_MAX_FILES,
+        },
+        {
+            "settings": settings,
+            "embeddings": embeddings,
+            "repo_url": "https://github.com/fastapi/fastapi",
+            "branch": "master",
+            "path": "docs/pt/docs",
+            "max_files": verify_pipeline.VERIFY_MAX_FILES,
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -268,15 +383,14 @@ async def test_verify_query_cannot_use_another_enabled_github_source(
 async def test_verify_query_proves_positive_retrieval_for_target_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    event_id = uuid4()
+    session = FakeSession(objects={QueryEvent: anonymous_event(event_id)})
+
     async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
         assert kwargs["source_id"] == 3
-        return SimpleNamespace(
-            answer=SimpleNamespace(sentences=[SimpleNamespace(text="Synchronized answer")]),
-            metrics=SimpleNamespace(retrieved_chunk_count=1, latency_ms=1),
-            event_id=uuid4(),
-        )
+        return answered_query_result(event_id)
 
-    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
     monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
 
     assert (
@@ -287,6 +401,89 @@ async def test_verify_query_proves_positive_retrieval_for_target_source(
         )
         is True
     )
+    assert (QueryEvent, event_id) in session.requested_ids
+
+
+@pytest.mark.asyncio
+async def test_verify_query_rejects_query_event_with_visitor_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_id = uuid4()
+    event = anonymous_event(event_id)
+    event.question = "How do I run this?"
+    session = FakeSession(objects={QueryEvent: event})
+
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        return answered_query_result(event_id)
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    assert await verify_pipeline.verify_query(object(), object(), ingestion_result()) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("citation_id", None),
+        ("supported_text", ""),
+        ("commit_sha", "main"),
+        (
+            "source_url",
+            "https://github.com/example/project/blob/main/docs/pt/docs/tutorial/first-steps.md",
+        ),
+        ("repository_path", "other/tutorial/first-steps.md"),
+        ("chunk_id", None),
+    ],
+)
+async def test_verify_query_requires_commit_pinned_answer_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    event_id = uuid4()
+    session = FakeSession(objects={QueryEvent: anonymous_event(event_id)})
+
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        result = answered_query_result(event_id)
+        setattr(result.evidence[0], field, value)
+        return result
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    assert await verify_pipeline.verify_query(object(), object(), ingestion_result()) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        SimpleNamespace(text="Use fastapi dev with the application path.", citation_id=None),
+        SimpleNamespace(text="Use fastapi dev with the application path.", citation_id=""),
+        SimpleNamespace(
+            text="Use fastapi dev with the application path.", citation_id="citation-2"
+        ),
+        SimpleNamespace(text="Use fastapi dev with the application path."),
+    ],
+)
+async def test_verify_query_requires_each_answer_sentence_citation_to_map_to_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    sentence: SimpleNamespace,
+) -> None:
+    event_id = uuid4()
+    session = FakeSession(objects={QueryEvent: anonymous_event(event_id)})
+
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        result = answered_query_result(event_id)
+        result.answer.sentences = [sentence]
+        return result
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    assert await verify_pipeline.verify_query(object(), object(), ingestion_result()) is False
 
 
 @pytest.mark.asyncio

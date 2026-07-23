@@ -223,6 +223,126 @@ async def test_run_query_returns_inspection_evidence_when_fused_gap_is_insuffici
 
 
 @pytest.mark.asyncio
+async def test_run_query_answers_vector_only_chunk_with_sentence_term_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_id = uuid4()
+    captured_event: dict[str, object] = {}
+    chunks = [
+        make_chunk(
+            18,
+            fused_score=0.02,
+            text="Importe FastAPI para criar a aplicação. Depois declare rotas.",
+            text_score=None,
+        )
+    ]
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return chunks
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured_event.update(kwargs)
+        return SimpleNamespace(id=event_id)
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    result = await querying.run_query(
+        FakeSession(),
+        question="Como criar uma aplicação com FastAPI?",
+        top_k=5,
+        source=None,
+        settings=settings(),
+        embeddings=FakeEmbeddings(),
+    )
+
+    assert result.state == "answered"
+    assert result.answer is not None
+    assert [sentence.chunk_id for sentence in result.answer.sentences] == [18]
+    assert result.evidence[0].citation_id == "citation-1"
+    assert result.evidence[0].supported_text == "Importe FastAPI para criar a aplicação."
+    assert captured_event["state"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_run_query_refuses_vector_only_chunk_with_only_generic_term_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_event: dict[str, object] = {}
+    chunks = [
+        make_chunk(
+            19,
+            fused_score=0.02,
+            text="FastAPI Cloud está disponível para alguns usuários.",
+            text_score=None,
+        )
+    ]
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return chunks
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured_event.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    result = await querying.run_query(
+        FakeSession(),
+        question="Qual é o preço do FastAPI Cloud?",
+        top_k=5,
+        source=None,
+        settings=settings(),
+        embeddings=FakeEmbeddings(),
+    )
+
+    assert result.state == "insufficient_evidence"
+    assert result.answer is None
+    assert all(item.citation_id is None for item in result.evidence)
+    assert captured_event["state"] == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_run_query_refuses_vector_only_english_generic_term_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_event: dict[str, object] = {}
+    chunks = [
+        make_chunk(
+            22,
+            fused_score=0.02,
+            text="Use it with FastAPI.",
+            text_score=None,
+        )
+    ]
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return chunks
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured_event.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    result = await querying.run_query(
+        FakeSession(),
+        question="How do I use Redis Sentinel with FastAPI?",
+        top_k=5,
+        source=None,
+        settings=settings(),
+        embeddings=FakeEmbeddings(),
+    )
+
+    assert result.state == "insufficient_evidence"
+    assert result.answer is None
+    assert all(item.citation_id is None for item in result.evidence)
+    assert captured_event["state"] == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
 async def test_run_query_refuses_fallback_without_lexical_support_from_used_chunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

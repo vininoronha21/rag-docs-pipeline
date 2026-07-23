@@ -16,6 +16,7 @@ from app.services.chunking import Chunk
 from app.services.repositories import (
     SourceVersionDocument,
     create_source_version_with_documents,
+    get_analytics_summary,
     get_doc_source_for_update,
     get_or_create_doc_source,
     promote_source_version,
@@ -68,6 +69,36 @@ def _insert_version(
         ),
         {"source_id": source_id, "commit_sha": commit_sha},
     ).scalar_one()
+
+
+def _insert_document_with_chunk(
+    connection: Connection,
+    *,
+    version_id: int,
+    repository_path: str,
+    chunk_hash: str,
+) -> None:
+    document_id = connection.execute(
+        text(
+            "INSERT INTO documents "
+            "(source_version_id, repository_path, source, source_url, content) "
+            "VALUES (:version_id, :path, 'github', 'https://example.test/doc', 'content') "
+            "RETURNING id"
+        ),
+        {"version_id": version_id, "path": repository_path},
+    ).scalar_one()
+    connection.execute(
+        text(
+            "INSERT INTO document_chunks "
+            "(document_id, chunk_text, chunk_index, chunk_hash, embedding, chunk_metadata) "
+            "VALUES (:document_id, 'content', 0, :chunk_hash, CAST(:embedding AS vector), '{}')"
+        ),
+        {
+            "document_id": document_id,
+            "chunk_hash": chunk_hash,
+            "embedding": "[" + ",".join(["0"] * 1536) + "]",
+        },
+    )
 
 
 def test_orm_metadata_matches_source_version_ownership() -> None:
@@ -125,6 +156,67 @@ def test_source_version_schema_constraints(sync_connection: Connection) -> None:
         "uq_documents_version_path": "UNIQUE (source_version_id, repository_path)",
     }
     sync_connection.rollback()
+
+
+@pytest.mark.integration
+def test_analytics_summary_reports_enabled_active_corpus_counts(
+    sync_connection: Connection,
+) -> None:
+    transaction = sync_connection.begin_nested()
+    try:
+        enabled_source_id = _insert_source(sync_connection, repository="enabled/project")
+        enabled_active_version_id = _insert_version(sync_connection, enabled_source_id)
+        enabled_retained_version_id = _insert_version(
+            sync_connection,
+            enabled_source_id,
+            commit_sha="b" * 40,
+        )
+        disabled_source_id = _insert_source(sync_connection, repository="disabled/project")
+        disabled_active_version_id = _insert_version(
+            sync_connection,
+            disabled_source_id,
+            commit_sha="c" * 40,
+        )
+        sync_connection.execute(
+            text("UPDATE doc_sources SET active_version_id = :version_id WHERE id = :source_id"),
+            {"version_id": enabled_active_version_id, "source_id": enabled_source_id},
+        )
+        sync_connection.execute(
+            text(
+                "UPDATE doc_sources SET active_version_id = :version_id, enabled = false "
+                "WHERE id = :source_id"
+            ),
+            {"version_id": disabled_active_version_id, "source_id": disabled_source_id},
+        )
+        _insert_document_with_chunk(
+            sync_connection,
+            version_id=enabled_active_version_id,
+            repository_path="docs/enabled-active.md",
+            chunk_hash="a" * 64,
+        )
+        _insert_document_with_chunk(
+            sync_connection,
+            version_id=enabled_retained_version_id,
+            repository_path="docs/enabled-retained.md",
+            chunk_hash="b" * 64,
+        )
+        _insert_document_with_chunk(
+            sync_connection,
+            version_id=disabled_active_version_id,
+            repository_path="docs/disabled-active.md",
+            chunk_hash="c" * 64,
+        )
+
+        with Session(bind=sync_connection, expire_on_commit=False) as session:
+            summary = asyncio.run(get_analytics_summary(AsyncSessionFacade(session)))
+
+        assert summary.document_count == 3
+        assert summary.chunk_count == 3
+        assert summary.active_document_count == 1
+        assert summary.active_chunk_count == 1
+    finally:
+        transaction.rollback()
+        sync_connection.rollback()
 
 
 @pytest.mark.integration

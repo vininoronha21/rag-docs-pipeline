@@ -12,6 +12,8 @@ async def test_analytics_summary_route_returns_aggregate_metrics(
     summary = AnalyticsSummary(
         document_count=10,
         chunk_count=120,
+        active_document_count=6,
+        active_chunk_count=80,
         source_count=3,
         enabled_source_count=2,
         query_count=8,
@@ -31,6 +33,8 @@ async def test_analytics_summary_route_returns_aggregate_metrics(
     assert response == AnalyticsSummaryResponse(
         document_count=10,
         chunk_count=120,
+        active_document_count=6,
+        active_chunk_count=80,
         source_count=3,
         enabled_source_count=2,
         query_count=8,

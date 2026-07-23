@@ -90,6 +90,49 @@ def test_evaluation_passes_exact_gate() -> None:
     assert report.unsupported_refusals == 4
 
 
+def test_evaluation_report_quality_gate_documents_answerable_answer_requirement() -> None:
+    mod = evaluation_module()
+
+    report_json = mod.evaluate(cases=make_cases(answerable_hits=14, unsupported_hits=4)).to_json()
+
+    assert report_json["quality_gate"]["answerable_answered_with_citations_required"] is True
+
+
+def test_evaluation_fails_when_answerable_case_refuses_at_passing_counts() -> None:
+    mod = evaluation_module()
+    cases = make_cases(answerable_hits=16, unsupported_hits=4)
+    cases[0] = replace(
+        cases[0],
+        observed_state="insufficient_evidence",
+        answer_sentence_count=0,
+        validated_answer_sentence_count=0,
+    )
+
+    report = mod.evaluate(cases=cases)
+
+    assert report.answerable_top3_hits == 16
+    assert report.unsupported_refusals == 4
+    assert report.answer_sentence_validation_failures == 0
+    assert report.passed is False
+
+
+def test_evaluation_fails_when_answerable_case_has_no_cited_answer_sentences() -> None:
+    mod = evaluation_module()
+    cases = make_cases(answerable_hits=16, unsupported_hits=4)
+    cases[0] = replace(
+        cases[0],
+        answer_sentence_count=0,
+        validated_answer_sentence_count=0,
+    )
+
+    report = mod.evaluate(cases=cases)
+
+    assert report.answerable_top3_hits == 16
+    assert report.unsupported_refusals == 4
+    assert report.answer_sentence_validation_failures == 0
+    assert report.passed is False
+
+
 def test_evaluation_fails_when_unsupported_case_is_answered() -> None:
     mod = evaluation_module()
 

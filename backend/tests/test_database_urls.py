@@ -39,6 +39,7 @@ def test_production_preserves_driver_specific_tls_query_parameters() -> None:
         admin_secret="secret-for-tests",
         database_url=runtime_url,
         migration_database_url=migration_url,
+        allowed_origins=["https://docs.example.com"],
         _env_file=None,
     )
 
@@ -80,6 +81,20 @@ def test_migration_database_url_rejects_async_driver() -> None:
             migration_database_url="postgresql+asyncpg://user:pass@localhost:5432/rag_docs",
             _env_file=None,
         )
+
+
+def test_docker_compose_backend_provides_sync_migration_database_url() -> None:
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    backend_service = compose_path.read_text().split("  frontend:", maxsplit=1)[0]
+
+    assert (
+        "DATABASE_URL: postgresql+asyncpg://rag:rag@postgres:5432/rag_docs"
+        in backend_service
+    )
+    assert (
+        "MIGRATION_DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/rag_docs"
+        in backend_service
+    )
 
 
 def test_alembic_uses_migration_database_url_without_deriving_from_runtime_url(

@@ -84,7 +84,7 @@ class RequestObservabilityMiddleware:
         state = scope.get("state") or {}
         event: dict[str, Any] = {
             "event": "request_completed",
-            "route": _route_template(scope),
+            "operation": _operation_name(scope),
             "status": status_code,
             "duration_ms": duration_ms,
             "request_id": request_id,
@@ -100,11 +100,11 @@ class RequestObservabilityMiddleware:
         logger.info(json.dumps(event, sort_keys=True, separators=(",", ":")))
 
 
-def _route_template(scope: Scope) -> str:
+def _operation_name(scope: Scope) -> str:
     route = scope.get("route")
     if route is None:
         return "<unmatched>"
-    route_path = getattr(route, "path", None) or getattr(route, "path_format", None)
-    if route_path is None:
+    route_name = getattr(route, "name", None)
+    if route_name is None:
         return "<unknown>"
-    return str(route_path)
+    return str(route_name)

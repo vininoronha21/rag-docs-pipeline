@@ -10,12 +10,18 @@ const existingSource = {
   source_type: "github",
   source_config: { repo: "example/project", branch: "main", path: "docs" },
   last_sync: "2026-07-21T12:00:00Z",
-  enabled: true
+  enabled: true,
+  active_version_id: 8,
+  active_commit_sha: "abc123def456",
+  active_document_count: 10,
+  active_chunk_count: 70
 };
 
 const analyticsSummary = {
   document_count: 12,
   chunk_count: 84,
+  active_document_count: 10,
+  active_chunk_count: 70,
   source_count: 1,
   enabled_source_count: 1,
   query_count: 9,
@@ -28,6 +34,8 @@ const refreshedAnalyticsSummary = {
   ...analyticsSummary,
   document_count: 13,
   chunk_count: 91,
+  active_document_count: 11,
+  active_chunk_count: 77,
   enabled_source_count: 0
 };
 
@@ -35,6 +43,8 @@ const emptyAnalyticsSummary = {
   ...analyticsSummary,
   document_count: 0,
   chunk_count: 0,
+  active_document_count: 0,
+  active_chunk_count: 0,
   source_count: 0,
   enabled_source_count: 0
 };
@@ -155,7 +165,10 @@ describe("AdminShell", () => {
     const user = await unlockAdmin(secret);
 
     expect(await screen.findByText("example/project")).toBeVisible();
-    expect(screen.getByText("12 documentos")).toBeVisible();
+    expect(screen.getByText("10 documentos ativos")).toBeVisible();
+    expect(screen.getByText("70 chunks ativos")).toBeVisible();
+    expect(screen.getByText("Commit ativo: abc123def456")).toBeVisible();
+    expect(screen.getByText("versão #8 · 10 documentos · 70 chunks")).toBeVisible();
     expect(screen.getByText("pt-BR")).toBeVisible();
 
     await user.type(screen.getByLabelText("URL do repositório GitHub"), "https://github.com/example/project");
@@ -164,10 +177,10 @@ describe("AdminShell", () => {
     await user.click(screen.getByRole("button", { name: "Registrar e sincronizar fonte" }));
 
     expect(await screen.findByText("Resultado: synchronized")).toBeVisible();
-    expect(screen.getByText("Commit ativo: abc123def456")).toBeVisible();
+    expect(screen.getAllByText("Commit ativo: abc123def456")).toHaveLength(2);
     expect(screen.getByText("7 chunks sincronizados")).toBeVisible();
-    expect(await screen.findByText("13 documentos")).toBeVisible();
-    expect(screen.getByText("91 chunks")).toBeVisible();
+    expect(await screen.findByText("11 documentos ativos")).toBeVisible();
+    expect(screen.getByText("77 chunks ativos")).toBeVisible();
     expect(screen.getByText("0 fontes ativas")).toBeVisible();
     expect(screen.getByText("Desativada")).toBeVisible();
     expect(screen.getByText("Última sincronização: nunca")).toBeVisible();
@@ -185,7 +198,8 @@ describe("AdminShell", () => {
     expect(requestBodyAt(2)).toEqual({
       repo_url: "https://github.com/example/project",
       branch: "main",
-      path: "docs"
+      path: "docs",
+      max_files: 500
     });
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument();
     expectNoSecretPersistence(secret, spies);

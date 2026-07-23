@@ -17,6 +17,7 @@ Requirements:
 """
 
 import asyncio
+import re
 import sys
 import textwrap
 from typing import Any
@@ -26,7 +27,7 @@ from rich.table import Table
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
-from app.db.models import DocSource, Document, DocumentChunk, SourceVersion
+from app.db.models import DocSource, Document, DocumentChunk, QueryEvent, SourceVersion
 from app.db.session import AsyncSessionLocal
 from app.services.embeddings import build_embedding_provider
 from app.services.pipeline import GithubIngestionResult, ingest_github_repository
@@ -38,13 +39,28 @@ console = Console()
 # Configuration
 # ---------------------------------------------------------------------------
 
-VERIFY_REPO_URL = "https://github.com/tiangolo/fastapi"
-VERIFY_PATH = "docs/en/docs"
-VERIFY_MAX_FILES = 5
-VERIFY_QUESTION = "How do I run FastAPI locally?"
+VERIFY_REPO_URL = "https://github.com/fastapi/fastapi"
+VERIFY_BRANCH = "master"
+VERIFY_PATH = "docs/pt/docs"
+VERIFY_MAX_FILES = 500
+VERIFY_QUESTION = (
+    "Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção "
+    "`--entrypoint main:app` para ele deduzir o objeto da aplicação?"
+)
 VERIFY_SOURCE = "github"
 VERIFY_MIN_CHUNKS = 1
 VERIFY_MIN_DOCS = 1
+FORBIDDEN_QUERY_EVENT_FIELDS = {
+    "question",
+    "answer",
+    "answer_text",
+    "citation_snapshot",
+    "citations",
+    "retrieved_chunk_ids",
+    "client_ip",
+    "ip_address",
+    "user_agent",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +119,7 @@ async def verify_tables_exist() -> bool:
         "document_chunks",
         "doc_sources",
         "source_versions",
-        "queries",
+        "query_events",
         "alembic_version",
     }
     try:
@@ -135,7 +151,7 @@ async def verify_ingest(
                 settings=settings,
                 embeddings=embeddings,
                 repo_url=VERIFY_REPO_URL,
-                branch=None,
+                branch=VERIFY_BRANCH,
                 path=VERIFY_PATH,
                 max_files=VERIFY_MAX_FILES,
             )
@@ -154,7 +170,7 @@ async def verify_ingest(
                 settings=settings,
                 embeddings=embeddings,
                 repo_url=VERIFY_REPO_URL,
-                branch=None,
+                branch=VERIFY_BRANCH,
                 path=VERIFY_PATH,
                 max_files=VERIFY_MAX_FILES,
             )
@@ -299,16 +315,26 @@ async def verify_query(
                 embeddings=embeddings,
                 source_id=target.source_id,
             )
+            event = await session.get(QueryEvent, result.event_id) if result.event_id else None
 
         answer_text = (
             " ".join(sentence.text for sentence in result.answer.sentences)
             if result.answer is not None
             else ""
         )
+        state = getattr(result, "state", "answered" if answer_text.strip() else None)
         has_answer = bool(answer_text.strip())
         has_chunks = result.metrics.retrieved_chunk_count > 0
         latency_ok = result.metrics.latency_ms >= 0
         event_id_ok = bool(result.event_id)
+        state_ok = state == "answered"
+        citations_ok = _verify_answer_citations(result, target) if has_answer else False
+        event_schema_ok = _verify_anonymous_query_event(
+            event,
+            result=result,
+            target=target,
+            state=state,
+        )
 
         if has_answer:
             _pass("Query returns an answer", textwrap.shorten(answer_text, 80))
@@ -328,16 +354,178 @@ async def verify_query(
         else:
             _fail("Query latency recorded", f"unexpected value: {result.metrics.latency_ms}")
 
+        if state_ok:
+            _pass("Query state is answered")
+        else:
+            _fail("Query state is answered", f"state={state!r}")
+
         if event_id_ok:
             _pass("Anonymous query event persisted", f"event_id={result.event_id}")
         else:
             _fail("Anonymous query event persisted", f"unexpected event_id={result.event_id}")
 
-        return has_answer and has_chunks and latency_ok and event_id_ok
+        return (
+            has_answer
+            and has_chunks
+            and latency_ok
+            and event_id_ok
+            and state_ok
+            and citations_ok
+            and event_schema_ok
+        )
 
     except Exception as exc:  # noqa: BLE001
         _fail("Query execution", str(exc))
         return False
+
+
+def _verify_answer_citations(result: Any, target: GithubIngestionResult) -> bool:
+    evidence = list(getattr(result, "evidence", []) or [])
+    evidence_by_citation_id = {
+        citation_id.strip(): item
+        for item in evidence
+        if isinstance(citation_id := getattr(item, "citation_id", None), str)
+        and citation_id.strip()
+    }
+    evidence_by_chunk_id = {
+        chunk_id: item
+        for item in evidence
+        if isinstance(chunk_id := getattr(item, "chunk_id", None), int)
+        and not isinstance(chunk_id, bool)
+    }
+    if not evidence_by_citation_id:
+        _fail("Answered citations include cited evidence", "no citation_id found")
+        return False
+
+    ok = True
+    answer = getattr(result, "answer", None)
+    sentences = list(getattr(answer, "sentences", []) or [])
+    sentence_citation_ids: list[str] = []
+    for index, sentence in enumerate(sentences, start=1):
+        if hasattr(sentence, "citation_id"):
+            citation_id = getattr(sentence, "citation_id", None)
+        else:
+            chunk_id = getattr(sentence, "chunk_id", None)
+            chunk_evidence = evidence_by_chunk_id.get(chunk_id)
+            citation_id = getattr(chunk_evidence, "citation_id", None) if chunk_evidence else None
+
+        if not isinstance(citation_id, str) or not citation_id.strip():
+            _fail("Answer sentence includes citation ID", f"sentence {index}")
+            ok = False
+            continue
+
+        citation_id = citation_id.strip()
+        if citation_id not in evidence_by_citation_id:
+            _fail("Answer sentence citation maps to evidence", citation_id)
+            ok = False
+            continue
+        sentence_citation_ids.append(citation_id)
+
+    if not sentence_citation_ids:
+        return False
+
+    for citation_id in dict.fromkeys(sentence_citation_ids):
+        item = evidence_by_citation_id[citation_id]
+        supported_text = getattr(item, "supported_text", None)
+        repository_path = getattr(item, "repository_path", "")
+        commit_sha = getattr(item, "commit_sha", "")
+        source_url = getattr(item, "source_url", "")
+        chunk_id = getattr(item, "chunk_id", None)
+        path_prefix = target.path.rstrip("/")
+
+        if not isinstance(supported_text, str) or not supported_text.strip():
+            _fail("Answered citations include supported text", getattr(item, "citation_id", ""))
+            ok = False
+
+        if not isinstance(chunk_id, int) or isinstance(chunk_id, bool):
+            _fail("Answered citations include chunk metadata", getattr(item, "citation_id", ""))
+            ok = False
+
+        if not isinstance(repository_path, str) or not (
+            repository_path == path_prefix or repository_path.startswith(f"{path_prefix}/")
+        ):
+            _fail("Answered citations stay inside target source path", str(repository_path))
+            ok = False
+
+        if not isinstance(commit_sha, str) or re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            _fail("Answered citations include 40-hex commit SHA", str(commit_sha))
+            ok = False
+        elif commit_sha != target.commit_sha:
+            _fail("Answered citations use target source version", commit_sha)
+            ok = False
+
+        expected_prefix = f"https://github.com/{target.repository}/blob/{commit_sha}/"
+        if not isinstance(source_url, str) or not source_url.startswith(expected_prefix):
+            _fail("Answered citations use commit-pinned GitHub URLs", str(source_url))
+            ok = False
+
+    if ok:
+        _pass(
+            "Answer sentences cite commit-pinned evidence",
+            f"{len(sentences)} sentences, {len(set(sentence_citation_ids))} citations",
+        )
+    return ok
+
+
+def _verify_anonymous_query_event(
+    event: Any,
+    *,
+    result: Any,
+    target: GithubIngestionResult,
+    state: str | None,
+) -> bool:
+    if event is None:
+        _fail("Anonymous query event schema", "event row not found")
+        return False
+
+    event_fields = set(getattr(event, "__dict__", {}).keys()) - {"_sa_instance_state"}
+    forbidden_fields = sorted(event_fields & FORBIDDEN_QUERY_EVENT_FIELDS)
+    if forbidden_fields:
+        _fail("Anonymous query event stores no visitor content", ", ".join(forbidden_fields))
+        return False
+
+    checks = [
+        (getattr(event, "id", None) == result.event_id, "Event id matches query result"),
+        (getattr(event, "state", None) == state, "Event state matches query result"),
+        (
+            getattr(event, "latency_ms", None) == result.metrics.latency_ms,
+            "Event latency matches query metrics",
+        ),
+        (
+            getattr(event, "retrieved_chunk_count", None)
+            == result.metrics.retrieved_chunk_count,
+            "Event result count matches query metrics",
+        ),
+        (
+            sorted(getattr(event, "source_ids", []) or []) == [target.source_id],
+            "Event source id is target-only",
+        ),
+        (
+            sorted(getattr(event, "source_version_ids", []) or [])
+            == [target.source_version_id],
+            "Event source version id is target-only",
+        ),
+        (
+            getattr(event, "top_fused_score", None) == result.metrics.top_fused_score,
+            "Event top score matches query metrics",
+        ),
+        (
+            getattr(event, "score_gap", None) == result.metrics.score_gap,
+            "Event score gap matches query metrics",
+        ),
+        (getattr(event, "feedback", None) is None, "Event feedback starts empty"),
+    ]
+
+    ok = True
+    for passed, label in checks:
+        if passed:
+            _pass(label)
+        else:
+            _fail(label)
+            ok = False
+    if ok:
+        _pass("Anonymous query event stores no visitor content")
+    return ok
 
 
 async def verify_source_disable(
