@@ -114,6 +114,7 @@ export function ChatShell() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível consultar a documentação.");
+      requestAnimationFrame(() => errorRef.current?.focus());
     } finally {
       setBusy(false);
     }
@@ -131,6 +132,7 @@ export function ChatShell() {
     } catch (err) {
       setFeedback(previousFeedback);
       setError(err instanceof Error ? err.message : "Não foi possível registrar o feedback.");
+      requestAnimationFrame(() => errorRef.current?.focus());
     }
   }
 

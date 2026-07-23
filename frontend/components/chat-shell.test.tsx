@@ -375,4 +375,30 @@ describe("ChatShell", () => {
 
     expect(await screen.findByRole("dialog", { name: "Evidência para citação c2" })).toBeVisible();
   });
+
+  test("moves focus to the inline error when a query fails", async () => {
+    askDocsMock.mockRejectedValueOnce(new Error("Falha na consulta"));
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Falha na consulta");
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  test("does not re-send feedback when the already-selected thumb is clicked again", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    const helpful = await screen.findByRole("button", { name: "Marcar resposta como útil" });
+
+    await user.click(helpful);
+    expect(sendQueryFeedbackMock).toHaveBeenCalledTimes(1);
+
+    await user.click(helpful);
+    expect(sendQueryFeedbackMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Obrigado pelo retorno")).toBeVisible();
+  });
 });
