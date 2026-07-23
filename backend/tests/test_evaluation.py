@@ -90,6 +90,14 @@ def test_evaluation_passes_exact_gate() -> None:
     assert report.unsupported_refusals == 4
 
 
+def test_evaluation_report_quality_gate_documents_answerable_answer_requirement() -> None:
+    mod = evaluation_module()
+
+    report_json = mod.evaluate(cases=make_cases(answerable_hits=14, unsupported_hits=4)).to_json()
+
+    assert report_json["quality_gate"]["answerable_answered_with_citations_required"] is True
+
+
 def test_evaluation_fails_when_answerable_case_refuses_at_passing_counts() -> None:
     mod = evaluation_module()
     cases = make_cases(answerable_hits=16, unsupported_hits=4)

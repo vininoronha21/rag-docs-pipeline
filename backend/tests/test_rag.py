@@ -127,6 +127,17 @@ def test_extractive_answer_ignores_generic_domain_only_support() -> None:
     assert rag.answer_has_query_term_support("Qual é o preço do FastAPI Cloud?", answer) is False
 
 
+def test_extractive_answer_ignores_english_generic_only_support() -> None:
+    answer = rag.ExtractiveAnswer(
+        sentences=[rag.CitedSentence(text="Use it with FastAPI.", chunk_id=1)]
+    )
+
+    assert rag.answer_has_query_term_support(
+        "How do I use Redis Sentinel with FastAPI?",
+        answer,
+    ) is False
+
+
 def test_extractive_answer_matches_import_prefix_variants() -> None:
     answer = rag.ExtractiveAnswer(
         sentences=[rag.CitedSentence(text="### Passo 1: importe `FastAPI`", chunk_id=1)]

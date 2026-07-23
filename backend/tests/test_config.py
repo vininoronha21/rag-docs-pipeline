@@ -88,6 +88,25 @@ def test_production_rejects_wildcard_and_local_allowed_origins(origin: str) -> N
         Settings(**PRODUCTION_SETTINGS, allowed_origins=[origin], _env_file=None)
 
 
+def test_production_rejects_empty_allowed_origins() -> None:
+    with pytest.raises(ValidationError, match="ALLOWED_ORIGINS"):
+        Settings(**PRODUCTION_SETTINGS, allowed_origins=[], _env_file=None)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "",
+        "https://docs.example.com/path",
+        "https://docs.example.com?preview=1",
+        "http://[::1]:3000",
+    ],
+)
+def test_production_rejects_invalid_allowed_origin_shapes(origin: str) -> None:
+    with pytest.raises(ValidationError, match="ALLOWED_ORIGINS"):
+        Settings(**PRODUCTION_SETTINGS, allowed_origins=[origin], _env_file=None)
+
+
 def test_production_accepts_explicit_https_allowed_origin() -> None:
     settings = Settings(
         **PRODUCTION_SETTINGS,

@@ -263,11 +263,17 @@ async def query_docs(
             detail=str(exc),
         ) from exc
     except SQLAlchemyError as exc:
-        await session.rollback()
+        rollback_error: str | None = None
+        try:
+            await session.rollback()
+        except Exception as rollback_exc:
+            rollback_error = rollback_exc.__class__.__name__
         event = {
             "event": "public_query_database_error",
             "error": exc.__class__.__name__,
         }
+        if rollback_error is not None:
+            event["rollback_error"] = rollback_error
         if request is not None:
             event["request_id"] = get_request_id(request)
         logger.warning(json.dumps(event, sort_keys=True, separators=(",", ":")))

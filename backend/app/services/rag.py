@@ -22,7 +22,14 @@ _QUERY_SUPPORT_STOPWORDS = frozenset(
         "quando",
         "onde",
         "cloud",
+        "for",
         "fastapi",
+        "how",
+        "the",
+        "use",
+        "using",
+        "what",
+        "with",
     }
 )
 _PROMPT_INJECTION_PATTERNS = [

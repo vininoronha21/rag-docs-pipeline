@@ -222,6 +222,44 @@ def test_query_route_sanitizes_database_errors(
     assert question_secret not in response.text
 
 
+def test_query_route_sanitizes_database_errors_when_rollback_fails(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    question_secret = "QUESTION-ROLLBACK-SECRET-2b3c4d"
+    rollback_secret = "ROLLBACK-SECRET-5e6f7a"
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            raise SQLAlchemyError(f"rollback params included {rollback_secret}")
+
+    async def fake_run_query(*args: object, **kwargs: object) -> None:
+        raise SQLAlchemyError(f"statement params included {question_secret}")
+
+    monkeypatch.setattr(routes, "run_query", fake_run_query)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.get_session] = lambda: FakeSession()
+    app.dependency_overrides[routes.get_settings] = lambda: object()
+    app.dependency_overrides[routes.get_embedding_provider] = lambda: object()
+
+    with caplog.at_level(logging.WARNING, logger="app.api.routes"):
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/query",
+            json={"question": f"How do I run FastAPI? {question_secret}", "top_k": 5},
+        )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    serialized_logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "public_query_database_error" in serialized_logs
+    assert "rollback_error" in serialized_logs
+    assert "SQLAlchemyError" in serialized_logs
+    assert question_secret not in serialized_logs
+    assert rollback_secret not in serialized_logs
+    assert question_secret not in response.text
+    assert rollback_secret not in response.text
+
+
 @pytest.mark.asyncio
 async def test_query_route_returns_bad_gateway_for_embedding_provider_error(
     monkeypatch: pytest.MonkeyPatch,

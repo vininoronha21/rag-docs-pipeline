@@ -1,5 +1,7 @@
 from functools import lru_cache
+from ipaddress import ip_address
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +37,44 @@ def _validate_asyncpg_runtime_query_parameters(database_url: URL) -> None:
             "DATABASE_URL uses asyncpg; use the asyncpg TLS query parameter "
             f"ssl instead of unsupported parameter(s): {unsupported}."
         )
+
+
+def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
+    if not allowed_origins:
+        raise ValueError("ALLOWED_ORIGINS must include at least one production origin.")
+
+    for origin in allowed_origins:
+        parsed = urlparse(origin.strip())
+        if (
+            not origin.strip()
+            or origin != origin.strip()
+            or not parsed.scheme
+            or not parsed.netloc
+            or parsed.path
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+            or parsed.hostname is None
+        ):
+            raise ValueError(
+                "ALLOWED_ORIGINS must contain exact origins without paths, "
+                "queries, or fragments when ENVIRONMENT=production."
+            )
+
+        if origin.strip() == "*" or _is_loopback_hostname(parsed.hostname):
+            raise ValueError(
+                "ALLOWED_ORIGINS must not include wildcard or localhost origins "
+                "when ENVIRONMENT=production."
+            )
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 class Settings(BaseSettings):
@@ -156,16 +196,7 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{', '.join(missing)} must be set when ENVIRONMENT=production."
                 )
-            if any(
-                origin.strip() == "*"
-                or "localhost" in origin.lower()
-                or "127.0.0.1" in origin
-                for origin in self.allowed_origins
-            ):
-                raise ValueError(
-                    "ALLOWED_ORIGINS must not include wildcard or localhost origins "
-                    "when ENVIRONMENT=production."
-                )
+            _validate_production_allowed_origins(self.allowed_origins)
         return self
 
 

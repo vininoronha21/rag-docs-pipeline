@@ -304,6 +304,45 @@ async def test_run_query_refuses_vector_only_chunk_with_only_generic_term_suppor
 
 
 @pytest.mark.asyncio
+async def test_run_query_refuses_vector_only_english_generic_term_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_event: dict[str, object] = {}
+    chunks = [
+        make_chunk(
+            22,
+            fused_score=0.02,
+            text="Use it with FastAPI.",
+            text_score=None,
+        )
+    ]
+
+    async def fake_retrieve_chunks(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return chunks
+
+    async def fake_log_query_event(*args: object, **kwargs: object) -> SimpleNamespace:
+        captured_event.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(querying, "retrieve_chunks", fake_retrieve_chunks)
+    monkeypatch.setattr(querying, "log_query_event", fake_log_query_event)
+
+    result = await querying.run_query(
+        FakeSession(),
+        question="How do I use Redis Sentinel with FastAPI?",
+        top_k=5,
+        source=None,
+        settings=settings(),
+        embeddings=FakeEmbeddings(),
+    )
+
+    assert result.state == "insufficient_evidence"
+    assert result.answer is None
+    assert all(item.citation_id is None for item in result.evidence)
+    assert captured_event["state"] == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
 async def test_run_query_refuses_fallback_without_lexical_support_from_used_chunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

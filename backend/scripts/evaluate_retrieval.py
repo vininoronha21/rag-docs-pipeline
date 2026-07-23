@@ -124,6 +124,7 @@ class EvaluationReport:
                 "answerable_top3_threshold": ANSWERABLE_TOP3_THRESHOLD,
                 "unsupported_refusal_threshold": UNSUPPORTED_REFUSAL_THRESHOLD,
                 "answer_sentence_validation_failures_allowed": 0,
+                "answerable_answered_with_citations_required": True,
             },
             "answerable_top3_hits": self.answerable_top3_hits,
             "answerable_total": self.answerable_total,
