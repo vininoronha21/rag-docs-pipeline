@@ -117,7 +117,9 @@ def answered_query_result(event_id: Any, **overrides: Any) -> SimpleNamespace:
         "event_id": event_id,
         "state": "answered",
         "answer": SimpleNamespace(
-            sentences=[SimpleNamespace(text="Use fastapi dev with the application path.")]
+            sentences=[
+                SimpleNamespace(text="Use fastapi dev with the application path.", chunk_id=3)
+            ]
         ),
         "evidence": [
             SimpleNamespace(
@@ -135,6 +137,7 @@ def answered_query_result(event_id: Any, **overrides: Any) -> SimpleNamespace:
                 vector_score=0.88,
                 text_score=0.74,
                 fused_score=0.91,
+                chunk_id=3,
             )
         ],
         "metrics": SimpleNamespace(
@@ -431,6 +434,7 @@ async def test_verify_query_rejects_query_event_with_visitor_content(
             "https://github.com/example/project/blob/main/docs/pt/docs/tutorial/first-steps.md",
         ),
         ("repository_path", "other/tutorial/first-steps.md"),
+        ("chunk_id", None),
     ],
 )
 async def test_verify_query_requires_commit_pinned_answer_evidence(
@@ -444,6 +448,36 @@ async def test_verify_query_requires_commit_pinned_answer_evidence(
     async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
         result = answered_query_result(event_id)
         setattr(result.evidence[0], field, value)
+        return result
+
+    monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(verify_pipeline, "run_query", fake_run_query)
+
+    assert await verify_pipeline.verify_query(object(), object(), ingestion_result()) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        SimpleNamespace(text="Use fastapi dev with the application path.", citation_id=None),
+        SimpleNamespace(text="Use fastapi dev with the application path.", citation_id=""),
+        SimpleNamespace(
+            text="Use fastapi dev with the application path.", citation_id="citation-2"
+        ),
+        SimpleNamespace(text="Use fastapi dev with the application path."),
+    ],
+)
+async def test_verify_query_requires_each_answer_sentence_citation_to_map_to_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    sentence: SimpleNamespace,
+) -> None:
+    event_id = uuid4()
+    session = FakeSession(objects={QueryEvent: anonymous_event(event_id)})
+
+    async def fake_run_query(*args: object, **kwargs: object) -> SimpleNamespace:
+        result = answered_query_result(event_id)
+        result.answer.sentences = [sentence]
         return result
 
     monkeypatch.setattr(verify_pipeline, "AsyncSessionLocal", lambda: session)

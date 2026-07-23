@@ -381,21 +381,64 @@ async def verify_query(
 
 def _verify_answer_citations(result: Any, target: GithubIngestionResult) -> bool:
     evidence = list(getattr(result, "evidence", []) or [])
-    cited_evidence = [item for item in evidence if getattr(item, "citation_id", None)]
-    if not cited_evidence:
+    evidence_by_citation_id = {
+        citation_id.strip(): item
+        for item in evidence
+        if isinstance(citation_id := getattr(item, "citation_id", None), str)
+        and citation_id.strip()
+    }
+    evidence_by_chunk_id = {
+        chunk_id: item
+        for item in evidence
+        if isinstance(chunk_id := getattr(item, "chunk_id", None), int)
+        and not isinstance(chunk_id, bool)
+    }
+    if not evidence_by_citation_id:
         _fail("Answered citations include cited evidence", "no citation_id found")
         return False
 
     ok = True
-    for item in cited_evidence:
+    answer = getattr(result, "answer", None)
+    sentences = list(getattr(answer, "sentences", []) or [])
+    sentence_citation_ids: list[str] = []
+    for index, sentence in enumerate(sentences, start=1):
+        if hasattr(sentence, "citation_id"):
+            citation_id = getattr(sentence, "citation_id", None)
+        else:
+            chunk_id = getattr(sentence, "chunk_id", None)
+            chunk_evidence = evidence_by_chunk_id.get(chunk_id)
+            citation_id = getattr(chunk_evidence, "citation_id", None) if chunk_evidence else None
+
+        if not isinstance(citation_id, str) or not citation_id.strip():
+            _fail("Answer sentence includes citation ID", f"sentence {index}")
+            ok = False
+            continue
+
+        citation_id = citation_id.strip()
+        if citation_id not in evidence_by_citation_id:
+            _fail("Answer sentence citation maps to evidence", citation_id)
+            ok = False
+            continue
+        sentence_citation_ids.append(citation_id)
+
+    if not sentence_citation_ids:
+        return False
+
+    for citation_id in dict.fromkeys(sentence_citation_ids):
+        item = evidence_by_citation_id[citation_id]
         supported_text = getattr(item, "supported_text", None)
         repository_path = getattr(item, "repository_path", "")
         commit_sha = getattr(item, "commit_sha", "")
         source_url = getattr(item, "source_url", "")
+        chunk_id = getattr(item, "chunk_id", None)
         path_prefix = target.path.rstrip("/")
 
         if not isinstance(supported_text, str) or not supported_text.strip():
             _fail("Answered citations include supported text", getattr(item, "citation_id", ""))
+            ok = False
+
+        if not isinstance(chunk_id, int) or isinstance(chunk_id, bool):
+            _fail("Answered citations include chunk metadata", getattr(item, "citation_id", ""))
             ok = False
 
         if not isinstance(repository_path, str) or not (
@@ -417,7 +460,10 @@ def _verify_answer_citations(result: Any, target: GithubIngestionResult) -> bool
             ok = False
 
     if ok:
-        _pass("Answered citations are commit-pinned", f"{len(cited_evidence)} citations")
+        _pass(
+            "Answer sentences cite commit-pinned evidence",
+            f"{len(sentences)} sentences, {len(set(sentence_citation_ids))} citations",
+        )
     return ok
 
 
