@@ -62,7 +62,7 @@ post_query() {
   make_temp request_file
 
   jq -n --arg question "$question" '{question: $question, top_k: 5}' >"$request_file"
-  curl --fail --silent --show-error \
+  "${cold_start_curl[@]}" \
     --request POST \
     --header 'Content-Type: application/json' \
     --data-binary "@$request_file" \
@@ -87,7 +87,7 @@ if [[ -z "$backend_url" ]]; then
 fi
 
 cold_start_curl=(curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 10)
-direct_curl=(curl --fail --silent --show-error)
+status_curl=(curl --silent --show-error --retry 12 --retry-all-errors --retry-delay 10)
 
 make_temp health_response
 make_temp ready_response
@@ -95,7 +95,7 @@ make_temp answered_response
 make_temp unsupported_response
 
 log_step "Checking frontend availability."
-"${direct_curl[@]}" --output /dev/null "$frontend_url"
+"${cold_start_curl[@]}" --output /dev/null "$frontend_url"
 
 log_step "Checking backend health."
 "${cold_start_curl[@]}" --output "$health_response" "$backend_url/api/health"
@@ -148,7 +148,7 @@ jq -e '
   fail "Unsupported smoke query did not return insufficient_evidence."
 
 log_step "Checking admin authentication boundary."
-admin_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+admin_status="$("${status_curl[@]}" --output /dev/null --write-out '%{http_code}' \
   "$backend_url/api/admin/sources")"
 if [[ "$admin_status" != "401" ]]; then
   fail "Admin unauthorized smoke check did not return 401."

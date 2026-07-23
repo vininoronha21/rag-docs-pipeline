@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 from collections.abc import Callable, Iterator
@@ -138,11 +139,71 @@ def test_ci_defines_manual_post_deploy_smoke_job_only_for_workflow_dispatch() ->
     assert "post-deploy-smoke:" in workflow
     assert "if: github.event_name == 'workflow_dispatch'" in workflow
     assert "environment: ${{ inputs.environment }}" in workflow
-    assert "FRONTEND_URL: ${{ vars.FRONTEND_URL }}" in workflow
-    assert "BACKEND_URL: ${{ vars.BACKEND_URL }}" in workflow
-    assert "SMOKE_ANSWERABLE_QUESTION: ${{ vars.SMOKE_ANSWERABLE_QUESTION }}" in workflow
-    assert "SMOKE_UNSUPPORTED_QUESTION: ${{ vars.SMOKE_UNSUPPORTED_QUESTION }}" in workflow
+    assert "FRONTEND_URL: ${{ secrets.FRONTEND_URL }}" in workflow
+    assert "BACKEND_URL: ${{ secrets.BACKEND_URL }}" in workflow
+    assert "SMOKE_ANSWERABLE_QUESTION: ${{ secrets.SMOKE_ANSWERABLE_QUESTION }}" in workflow
+    assert "SMOKE_UNSUPPORTED_QUESTION: ${{ secrets.SMOKE_UNSUPPORTED_QUESTION }}" in workflow
+    assert "vars.FRONTEND_URL" not in workflow
+    assert "vars.BACKEND_URL" not in workflow
+    assert "vars.SMOKE_ANSWERABLE_QUESTION" not in workflow
+    assert "vars.SMOKE_UNSUPPORTED_QUESTION" not in workflow
     assert "bash scripts/smoke.sh" in workflow
+
+
+def test_smoke_uses_bounded_retry_for_all_network_checks(tmp_path: Path) -> None:
+    real_curl = shutil.which("curl")
+    assert real_curl is not None
+    curl_log = tmp_path / "curl.jsonl"
+    curl_wrapper = tmp_path / "curl"
+    curl_wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "with open(os.environ['SMOKE_CURL_LOG'], 'a', encoding='utf-8') as log:\n"
+        "    log.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "raise SystemExit(subprocess.call([os.environ['SMOKE_REAL_CURL'], *sys.argv[1:]]))\n",
+    )
+    curl_wrapper.chmod(0o755)
+    scenario = SmokeScenario(
+        answered_payload=answered_payload(), unsupported_payload=unsupported_payload()
+    )
+
+    with fake_smoke_server(scenario) as base_url:
+        result = run_smoke(
+            base_url,
+            env_overrides={
+                "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+                "SMOKE_CURL_LOG": str(curl_log),
+                "SMOKE_REAL_CURL": real_curl,
+            },
+        )
+
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in curl_log.read_text().splitlines()]
+    calls_by_url = {args[-1]: args for args in calls if args}
+
+    retried_fail_fast_urls = [
+        base_url,
+        f"{base_url}/api/health",
+        f"{base_url}/api/ready",
+        f"{base_url}/api/query",
+    ]
+    for url in retried_fail_fast_urls:
+        matching_calls = [args for args in calls if args and args[-1] == url]
+        assert matching_calls, f"missing curl call for {url}"
+        for args in matching_calls:
+            assert "--fail" in args
+            assert_curl_uses_required_retry(args)
+
+    admin_args = calls_by_url[f"{base_url}/api/admin/sources"]
+    assert "--fail" not in admin_args
+    assert "--output" in admin_args
+    assert admin_args[admin_args.index("--output") + 1] == "/dev/null"
+    assert "--write-out" in admin_args
+    assert admin_args[admin_args.index("--write-out") + 1] == "%{http_code}"
+    assert_curl_uses_required_retry(admin_args)
 
 
 def answered_payload() -> dict[str, Any]:
@@ -200,13 +261,17 @@ def unsupported_payload() -> dict[str, Any]:
     }
 
 
-def run_smoke(base_url: str) -> subprocess.CompletedProcess[str]:
+def run_smoke(
+    base_url: str, env_overrides: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
         "FRONTEND_URL": f"{base_url}/",
         "BACKEND_URL": f"{base_url}/",
         "SMOKE_ANSWERABLE_QUESTION": ANSWERABLE_QUESTION,
         "SMOKE_UNSUPPORTED_QUESTION": UNSUPPORTED_QUESTION,
     }
+    if env_overrides is not None:
+        env.update(env_overrides)
     return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=ROOT,
@@ -297,3 +362,16 @@ def assert_private_values_not_logged(result: subprocess.CompletedProcess[str]) -
         ADMIN_BODY,
     ):
         assert private_value not in combined_output
+
+
+def assert_curl_uses_required_retry(args: list[str]) -> None:
+    assert "--silent" in args
+    assert "--show-error" in args
+    assert_ordered_args(args, ["--retry", "12", "--retry-all-errors", "--retry-delay", "10"])
+
+
+def assert_ordered_args(args: list[str], expected: list[str]) -> None:
+    start = 0
+    for item in expected:
+        position = args.index(item, start)
+        start = position + 1
