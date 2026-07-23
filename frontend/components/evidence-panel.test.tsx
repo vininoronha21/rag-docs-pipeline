@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Evidence } from "@/lib/api";
-import { EvidencePanel } from "./evidence-panel";
+import { EvidenceBench, EvidencePanel } from "./evidence-panel";
 
 const evidenceRecords: Evidence[] = [
   {
@@ -36,6 +36,9 @@ const evidenceRecords: Evidence[] = [
     fused_score: 0.64
   }
 ];
+
+// Alias for new bench tests (same data, different name used by the brief)
+const sampleEvidence = evidenceRecords;
 
 function EvidencePanelHarness() {
   const [open, setOpen] = useState(false);
@@ -145,5 +148,25 @@ describe("EvidencePanel", () => {
 
     expect(screen.queryByRole("dialog", { name: "Evidência para citação c2" })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
+  });
+});
+
+describe("EvidenceBench", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("EvidenceBench renders the selected citation inline without a dialog", () => {
+    render(<EvidenceBench evidence={sampleEvidence} selectedId="c2" />);
+
+    expect(screen.getByLabelText("Evidência da resposta")).toBeInTheDocument();
+    expect(screen.getByText("frontend/README.md")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Abrir fonte fixada no commit" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  test("EvidenceBench shows the empty state when no evidence resolves", () => {
+    render(<EvidenceBench evidence={[]} selectedId={null} />);
+    expect(screen.getByText("Evidência indisponível")).toBeVisible();
   });
 });
