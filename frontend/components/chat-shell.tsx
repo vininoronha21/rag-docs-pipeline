@@ -109,7 +109,9 @@ export function ChatShell() {
       setPanelEvidence(nextResponse.evidence);
       setSelectedEvidenceId(defaultCitation);
 
-      if (nextResponse.insufficient_evidence && !isDesktop) {
+      const responseIsRefusal =
+        nextResponse.insufficient_evidence || (nextResponse.answer?.sentences.length ?? 0) === 0;
+      if (responseIsRefusal && !isDesktop) {
         setEvidencePanelOpen(true);
       }
     } catch (err) {
@@ -173,6 +175,7 @@ export function ChatShell() {
               aria-hidden="true"
             />
             <span>{readinessState === "ready" ? "API pronta" : "Preparando"}</span>
+            <span className="sr-only">{readinessDetail}</span>
             {readinessState === "blocked" ? (
               <button
                 type="button"

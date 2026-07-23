@@ -376,6 +376,16 @@ describe("ChatShell", () => {
     expect(await screen.findByRole("dialog", { name: "Evidência para citação c2" })).toBeVisible();
   });
 
+  test("mobile opens the evidence sheet for an answered-but-empty refusal", async () => {
+    setViewport(false);
+    askDocsMock.mockResolvedValueOnce(answeredButEmptyResponse());
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
   test("moves focus to the inline error when a query fails", async () => {
     askDocsMock.mockRejectedValueOnce(new Error("Falha na consulta"));
     render(<ChatShell />);
