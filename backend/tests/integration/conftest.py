@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,42 @@ def _validate_test_database_url(
         raise pytest.UsageError("TEST_DATABASE_URL database name must end with '_test'")
 
 
+def _async_runtime_url_for_test_database(test_database_url: str) -> str:
+    url = _parse_postgresql_url(test_database_url)
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    query.pop("channel_binding", None)
+    if sslmode is not None and "ssl" not in query:
+        query["ssl"] = sslmode
+    return (
+        url.set(drivername="postgresql+asyncpg", query=query)
+        .render_as_string(hide_password=False)
+    )
+
+
+@contextmanager
+def _alembic_test_database_environment(test_database_url: str) -> Iterator[None]:
+    previous_database_url = os.environ.get("DATABASE_URL")
+    previous_migration_database_url = os.environ.get("MIGRATION_DATABASE_URL")
+
+    os.environ["DATABASE_URL"] = _async_runtime_url_for_test_database(test_database_url)
+    os.environ["MIGRATION_DATABASE_URL"] = test_database_url
+    get_settings.cache_clear()
+
+    try:
+        yield
+    finally:
+        if previous_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_database_url
+        if previous_migration_database_url is None:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+        else:
+            os.environ["MIGRATION_DATABASE_URL"] = previous_migration_database_url
+        get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session")
 def sync_connection() -> Iterator[Connection]:
     test_database_url = os.environ.get("TEST_DATABASE_URL")
@@ -51,19 +88,9 @@ def sync_connection() -> Iterator[Connection]:
     alembic_config.set_main_option("script_location", str(backend_dir / "alembic"))
     engine = create_engine(test_database_url)
 
-    previous_database_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = test_database_url
-    get_settings.cache_clear()
-
-    try:
+    with _alembic_test_database_environment(test_database_url):
         command.downgrade(alembic_config, "base")
         command.upgrade(alembic_config, "head")
-    finally:
-        if previous_database_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous_database_url
-        get_settings.cache_clear()
 
     try:
         with engine.connect() as connection:
