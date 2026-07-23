@@ -387,6 +387,20 @@ describe("ChatShell", () => {
     await waitFor(() => expect(alert).toHaveFocus());
   });
 
+  test("moves focus to the inline error when feedback submission fails", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    sendQueryFeedbackMock.mockRejectedValueOnce(new Error("Erro de feedback"));
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    const helpful = await screen.findByRole("button", { name: "Marcar resposta como útil" });
+    await user.click(helpful);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Erro de feedback");
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
   test("does not re-send feedback when the already-selected thumb is clicked again", async () => {
     askDocsMock.mockResolvedValueOnce(answeredResponse());
     render(<ChatShell />);
