@@ -72,12 +72,13 @@ Two-pane bench inside a max-width container, full viewport height:
 
 Editorial / technical:
 
-- **Typography.** Serif display face for headings (question label, answer
-  heading, evidence heading), loaded via `next/font` (Fraunces or Source
-  Serif — pick one, self-hosted by `next/font`, no network dependency at
-  runtime). Sans body (Inter or system stack). Monospace for citation chips,
-  commit SHA, and the excerpt block. Expose as CSS variables consumed by
-  Tailwind `fontFamily` tokens.
+- **Typography.** Body text is **Inter**, loaded via `next/font`
+  (self-hosted, no runtime network dependency). A serif display face is used
+  only for headings (question label, answer heading, evidence heading), also
+  via `next/font` — serif face picked at implementation time (e.g. Fraunces
+  or Source Serif). Monospace for citation chips, commit SHA, and the excerpt
+  block. Expose all three as CSS variables consumed by Tailwind `fontFamily`
+  tokens.
 - **Color.** Warm paper surface replacing cold slate; a slightly darker
   "bench" tone for the evidence pane to separate proof from answer; deepen
   the accent teal for contrast on paper. New tokens: `paper`, `bench`,
