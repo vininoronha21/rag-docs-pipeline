@@ -1,5 +1,7 @@
 from functools import lru_cache
+from ipaddress import ip_address
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +37,53 @@ def _validate_asyncpg_runtime_query_parameters(database_url: URL) -> None:
             "DATABASE_URL uses asyncpg; use the asyncpg TLS query parameter "
             f"ssl instead of unsupported parameter(s): {unsupported}."
         )
+
+
+def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
+    if not allowed_origins:
+        raise ValueError("ALLOWED_ORIGINS must include at least one production origin.")
+
+    for origin in allowed_origins:
+        parsed = urlparse(origin.strip())
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("ALLOWED_ORIGINS must contain valid origin ports.") from exc
+        if (
+            not origin.strip()
+            or origin != origin.strip()
+            or "*" in origin
+            or parsed.netloc.endswith(":")
+            or not parsed.scheme
+            or not parsed.netloc
+            or parsed.path
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(
+                "ALLOWED_ORIGINS must contain exact origins without paths, "
+                "queries, or fragments when ENVIRONMENT=production."
+            )
+
+        if _is_loopback_hostname(parsed.hostname):
+            raise ValueError(
+                "ALLOWED_ORIGINS must not include wildcard or localhost origins "
+                "when ENVIRONMENT=production."
+            )
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    normalized_hostname = hostname.rstrip(".").lower()
+    if normalized_hostname == "localhost" or normalized_hostname.endswith(".localhost"):
+        return True
+    try:
+        return ip_address(normalized_hostname).is_loopback
+    except ValueError:
+        return False
 
 
 class Settings(BaseSettings):
@@ -148,6 +197,7 @@ class Settings(BaseSettings):
                 for field_name, env_name in (
                     ("database_url", "DATABASE_URL"),
                     ("migration_database_url", "MIGRATION_DATABASE_URL"),
+                    ("allowed_origins", "ALLOWED_ORIGINS"),
                 )
                 if field_name not in self.model_fields_set
             ]
@@ -155,6 +205,7 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{', '.join(missing)} must be set when ENVIRONMENT=production."
                 )
+            _validate_production_allowed_origins(self.allowed_origins)
         return self
 
 

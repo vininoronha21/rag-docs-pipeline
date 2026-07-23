@@ -1,7 +1,10 @@
+import json
+import logging
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -45,6 +48,7 @@ from app.services.repositories import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 query_rate_limit = InMemoryRateLimiter(
     max_requests=get_settings().query_rate_limit_per_minute,
@@ -258,6 +262,25 @@ async def query_docs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except SQLAlchemyError as exc:
+        rollback_error: str | None = None
+        try:
+            await session.rollback()
+        except Exception as rollback_exc:
+            rollback_error = rollback_exc.__class__.__name__
+        event = {
+            "event": "public_query_database_error",
+            "error": exc.__class__.__name__,
+        }
+        if rollback_error is not None:
+            event["rollback_error"] = rollback_error
+        if request is not None:
+            event["request_id"] = get_request_id(request)
+        logger.warning(json.dumps(event, sort_keys=True, separators=(",", ":")))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Query service is temporarily unavailable. Try again later.",
+        ) from None
     citation_ids = {
         item.chunk_id: item.citation_id
         for item in result.evidence

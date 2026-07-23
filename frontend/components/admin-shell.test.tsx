@@ -198,7 +198,8 @@ describe("AdminShell", () => {
     expect(requestBodyAt(2)).toEqual({
       repo_url: "https://github.com/example/project",
       branch: "main",
-      path: "docs"
+      path: "docs",
+      max_files: 500
     });
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument();
     expectNoSecretPersistence(secret, spies);

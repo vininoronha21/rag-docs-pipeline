@@ -13,6 +13,8 @@ import type { AnalyticsSummary, DocSource, GithubIngestRequest, IngestResponse }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
+const curatedSourceMaxFiles = 500;
+
 export function AdminShell() {
   const adminSessionId = useRef(0);
   const [secretInput, setSecretInput] = useState("");
@@ -111,7 +113,8 @@ export function AdminShell() {
     const payload: GithubIngestRequest = {
       repo_url: repoUrl.trim(),
       branch: branch.trim(),
-      path: curatedPath.trim()
+      path: curatedPath.trim(),
+      max_files: curatedSourceMaxFiles
     };
 
     setSyncing(true);
