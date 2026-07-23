@@ -104,6 +104,8 @@ def test_production_rejects_empty_allowed_origins() -> None:
         "https://*.example.com",
         "https://user:pass@example.com",
         "https://example.com:bad",
+        "https://example.com:",
+        "http://app.localhost:3000",
     ],
 )
 def test_production_rejects_invalid_allowed_origin_shapes(origin: str) -> None:

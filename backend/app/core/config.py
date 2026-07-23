@@ -53,6 +53,7 @@ def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
             not origin.strip()
             or origin != origin.strip()
             or "*" in origin
+            or parsed.netloc.endswith(":")
             or not parsed.scheme
             or not parsed.netloc
             or parsed.path
@@ -77,7 +78,7 @@ def _validate_production_allowed_origins(allowed_origins: list[str]) -> None:
 
 def _is_loopback_hostname(hostname: str) -> bool:
     normalized_hostname = hostname.rstrip(".").lower()
-    if normalized_hostname == "localhost":
+    if normalized_hostname == "localhost" or normalized_hostname.endswith(".localhost"):
         return True
     try:
         return ip_address(normalized_hostname).is_loopback
