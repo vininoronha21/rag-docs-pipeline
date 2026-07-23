@@ -5,10 +5,18 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#111827",
-        surface: "#f8fafc",
-        line: "#d7dee8",
-        accent: "#0f766e"
+        ink: "#1f1b16",
+        "ink-soft": "#57534e",
+        paper: "#f7f4ee",
+        bench: "#efeae0",
+        surface: "#f7f4ee",
+        line: "#ddd6c9",
+        accent: "#0b5f57"
+      },
+      fontFamily: {
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        serif: ["var(--font-serif)", "Georgia", "serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"]
       }
     }
   },
