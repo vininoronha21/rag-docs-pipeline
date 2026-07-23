@@ -1,50 +1,41 @@
-# AI Agents Architecture — RAG for Documentation
+# AI Agents Architecture - RAG for Documentation
 
-This document defines the logical agents that make up the AI-ready data pipeline for the project. Although the MVP is monolithic (FastAPI), the architecture is designed with a clear separation of concerns across the RAG stages.
+This project is implemented as a FastAPI monolith, but the pipeline is organized around clear logical agents. The current release is citation-first, privacy-preserving, and admin-protected.
 
----
+## 1. Ingestion And Normalization Agent
 
-## 1. Ingestion & Normalization Agent (The Scraper)
-- **Responsibility:** Monitor external sources (GitHub repositories) and extract raw documents in a clean format.
-- **Current implementation:** `GithubClient`, `ingest_github_repository`, Markdown cleaning, and document/source upsert logic inside the FastAPI monolith.
-- **Tasks:**
-  - Authenticate and consume the GitHub API efficiently (respecting rate limits).
-  - Locate `.md` files and extract raw metadata (branch, path, SHA, last modified).
-  - Filter out code noise, broken relative links, and useless assets.
-  - Upsert `doc_sources` by source configuration and documents by `source_url`.
-- **Success Metric:** Ingest 100% of target documents without corrupting text structure.
-- **Current limitation:** No scheduled sync, no retry/backoff, and no source connectors beyond GitHub Markdown.
+- Responsibility: pull Markdown documentation from GitHub and normalize it without corrupting structure.
+- Current implementation: `GithubClient`, `ingest_github_repository`, Markdown cleanup, source locking, retry/backoff for transient GitHub HTTP failures, and admin-only `/api/admin/ingest/github`.
+- Version model: `DocSource` is unique by repository, branch, and path. Each synchronized commit creates or reuses a `SourceVersion`; active versions are promoted and older retained versions can be pruned.
+- Success metric: ingest the target FastAPI PT-BR docs from `https://github.com/fastapi/fastapi`, branch `master`, path `docs/pt/docs`, with documents tied to one commit SHA.
+- Current limitations: no scheduled sync, no queue/worker split, no streaming progress UI, and no source connectors beyond GitHub Markdown.
 
-## 2. Semantic Partitioning Agent (The Chunker)
-- **Responsibility:** Break long documents into semantically coherent, independent chunks enriched with metadata.
-- **Current implementation:** Custom Markdown cleanup, heading-aware splitting, overlap handling, metadata injection, and content-hash deduplication.
-- **Tasks:**
-  - Apply heading-aware and size-aware Markdown splitting strategies.
-  - Maintain an appropriate overlap window to preserve context continuity.
-  - Inject hierarchical metadata into each chunk (e.g. `{"parent_doc": "README.md", "section": "Installation"}`).
-  - Preserve useful source metadata such as repository, path, SHA, section, and chunk index.
-- **Success Metric:** Produce chunks that contain complete ideas and avoid cutting sentences or code blocks.
-- **Current limitation:** Chunk quality still needs review against real repositories before tuning.
+## 2. Semantic Partitioning Agent
 
-## 3. Vector Indexing & Retrieval Agent (The Retriever)
-- **Responsibility:** Bridge user natural language queries and mathematical storage in the vector database.
-- **Current implementation:** Local deterministic hash embeddings by default, optional OpenAI embeddings, PostgreSQL/pgvector persistence, and cosine retrieval.
-- **Tasks:**
-  - Generate embeddings through the configured provider.
-  - Persist and index vectors in PostgreSQL using the `pgvector` extension.
-  - Execute cosine-similarity searches using an HNSW index for low-latency retrieval (< 500ms).
-  - Exclude chunks linked to disabled document sources.
-  - Apply `RETRIEVAL_MIN_SCORE` before answer generation.
-- **Success Metric:** Return Top-K chunks that genuinely answer the user's question.
-- **Current limitation:** OpenAI embedding batching and retry/backoff are not implemented yet; local hash embeddings are not semantically strong.
+- Responsibility: split long Markdown documents into coherent, independently retrievable chunks.
+- Current implementation: Markdown cleanup, title extraction, heading-aware splitting, size-aware overlap, chunk hashes, and metadata injection for repository path, section, chunk index, source version, and commit-pinned provenance.
+- Success metric: chunks preserve complete ideas, support sentence-level citations, and avoid cutting important sections or code context where practical.
+- Current limitation: chunk quality is evaluated against the PT-BR FastAPI dataset, but further tuning should be driven by observed retrieval misses rather than speculative changes.
 
-## 4. Synthesis & Citation Guard Agent (The Orchestrator / LLM Layer)
-- **Responsibility:** Consume retrieved chunks, generate a final natural-language answer, and ensure factual anchoring (minimize hallucinations).
-- **Current implementation:** Shared API/CLI query service, prompt-injection-like chunk filtering, extractive answer generation, citations, query logging, feedback, history, and analytics.
-- **Tasks:**
-  - Assemble system prompts hardened against prompt injection and hallucination.
-  - Keep extractive answer mode as the safe local default.
-  - Add an optional LLM provider later without removing extractive fallback.
-  - Track the origin of each piece of information used and include citation metadata.
-- **Success Metric:** Provide direct, clear answers that explicitly cite the source link(s) used.
-- **Current limitation:** No true external LLM synthesis provider is implemented yet, even though `LLM_PROVIDER` and `OPENAI_CHAT_MODEL` settings exist.
+## 3. Vector Indexing And Retrieval Agent
+
+- Responsibility: bridge natural-language questions and persisted evidence.
+- Current implementation: local deterministic embeddings by default, optional OpenAI embeddings with timeout/retry, PostgreSQL/pgvector vectors, PostgreSQL full-text search, reciprocal-rank fusion, enabled-source filtering, active-version filtering, and score thresholds.
+- Public query surface: `POST /api/query` only. Retrieval excludes disabled sources and returns evidence from active source versions.
+- Success metric: return top evidence that answers supported PT-BR questions and refuse unsupported ones.
+- Current limitation: local hash embeddings are not semantically strong, OpenAI embedding batching is not implemented, and there is no reranker.
+
+## 4. Synthesis And Citation Guard Agent
+
+- Responsibility: turn retrieved chunks into a safe answer or refusal while preserving provenance.
+- Current implementation: shared API/CLI `run_query`, prompt-injection-like chunk filtering, extractive answer generation, `state="answered"` or `state="insufficient_evidence"`, citation IDs, evidence excerpts, commit SHA, and immutable GitHub blob URLs.
+- Privacy contract: no visitor question, answer text, citation snapshot, IP, user agent, or public history is persisted. `query_events` stores only an opaque UUID, state, latency, retrieved count, source IDs, source version IDs, score summaries, optional feedback, and timestamp.
+- Success metric: answerable questions include citation-linked sentences and commit-pinned evidence; unsupported questions refuse while still exposing best evidence.
+- Current limitation: `LLM_PROVIDER=openai` and `OPENAI_CHAT_MODEL` exist in settings, but no external chat synthesis provider is implemented.
+
+## 5. Operations And Admin Agent
+
+- Responsibility: keep production boundaries explicit and verifiable.
+- Current implementation: public `/api/health` and `/api/ready`, Bearer-protected `/api/admin/*`, `ADMIN_SECRET` required in production, CORS allow-listing, query/feedback/sync rate limits, Render and Vercel manifests, Neon-compatible async/sync DB URLs, and `scripts/smoke.sh`.
+- Verification: `backend/scripts/verify_pipeline.py`, backend tests, frontend typecheck/tests/build, evaluation gate, and post-deploy smoke.
+- Current blockers: live deployed smoke awaits real frontend/backend URLs; Docker runtime verification previously hit Docker Hub metadata timeout.
