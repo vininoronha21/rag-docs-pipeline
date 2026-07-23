@@ -16,6 +16,19 @@ const askDocsMock = vi.mocked(askDocs);
 const checkReadinessMock = vi.mocked(checkReadiness);
 const sendQueryFeedbackMock = vi.mocked(sendQueryFeedback);
 
+function setViewport(isDesktop: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: isDesktop,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn()
+  })) as unknown as typeof window.matchMedia;
+}
+
 const readyResponse: ReadinessResponse = {
   status: "ready",
   database: "ok",
@@ -114,6 +127,18 @@ function insufficientResponse(): PublicQueryResponse {
   };
 }
 
+function answeredButEmptyResponse(): PublicQueryResponse {
+  return {
+    event_id: "550e8400-e29b-41d4-a716-446655440002",
+    state: "answered",
+    answered: true,
+    insufficient_evidence: false,
+    answer: { sentences: [] },
+    evidence: [evidenceRecords[0]],
+    metrics: { latency_ms: 12, retrieved_chunk_count: 1, top_fused_score: 0.4, score_gap: null }
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -139,6 +164,7 @@ async function submitQuestion(question = "Como executo localmente?") {
 
 describe("ChatShell", () => {
   beforeEach(() => {
+    setViewport(true);
     askDocsMock.mockReset();
     checkReadinessMock.mockReset();
     sendQueryFeedbackMock.mockReset();
@@ -231,18 +257,11 @@ describe("ChatShell", () => {
     expect(within(secondSentence.closest("p") as HTMLElement).getByRole("button", {
       name: "Inspecionar evidência c2"
     })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Abrir fonte fixada no commit" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Inspecionar evidência c2" }));
-
-    const dialog = await screen.findByRole("dialog", { name: "Evidência para citação c2" });
-    expect(within(dialog).getByText("Inspeção da fonte")).toBeVisible();
-    expect(
-      within(dialog).getByText("Trecho exato usado para sustentar a frase da resposta.")
-    ).toBeVisible();
-    expect(within(dialog).getByRole("link", { name: "Abrir fonte fixada no commit" })).toBeVisible();
-    expect(within(dialog).getByText("frontend/README.md")).toBeVisible();
-    expect(within(dialog).queryByText("docs/development/local.md")).not.toBeInTheDocument();
+    const bench = screen.getByLabelText("Evidência da resposta");
+    expect(within(bench).getByText("frontend/README.md")).toBeVisible();
+    expect(within(bench).queryByText("docs/development/local.md")).not.toBeInTheDocument();
   });
 
   test("keeps sentence keys stable when multiple answer sentences cite the same evidence", async () => {
@@ -273,7 +292,38 @@ describe("ChatShell", () => {
     expect(
       await screen.findByText("Não encontrei evidências suficientes na documentação indexada para responder com segurança.")
     ).toBeVisible();
-    expect(await screen.findByRole("dialog", { name: "Evidência para citação c1" })).toBeVisible();
+    const bench = await screen.findByLabelText("Evidência da resposta");
+    expect(within(bench).getByText("docs/development/local.md")).toBeVisible();
+  });
+
+  test("shows the refusal badge and copy only for insufficient evidence, with no feedback controls", async () => {
+    askDocsMock.mockResolvedValueOnce(insufficientResponse());
+    render(<ChatShell />);
+
+    await submitQuestion("Existe suporte a billing?");
+
+    expect(
+      await screen.findByText(
+        "Não encontrei evidências suficientes na documentação indexada para responder com segurança."
+      )
+    ).toBeVisible();
+    expect(screen.getByText("Evidência insuficiente")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como útil" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como não útil" })).not.toBeInTheDocument();
+  });
+
+  test("treats an answered response with no sentences as a refusal", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredButEmptyResponse());
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    expect(
+      await screen.findByText(
+        "Não encontrei evidências suficientes na documentação indexada para responder com segurança."
+      )
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Marcar resposta como útil" })).not.toBeInTheDocument();
   });
 
   test("rolls back optimistic UUID feedback when the public feedback request fails", async () => {
@@ -296,5 +346,83 @@ describe("ChatShell", () => {
 
     await waitFor(() => expect(helpful).toHaveAttribute("aria-pressed", "false"));
     expect(screen.getByText("Feedback indisponível")).toBeVisible();
+  });
+
+  test("desktop shows the persistent evidence bench and switches it on citation click without a dialog", async () => {
+    setViewport(true);
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+
+    const bench = await screen.findByLabelText("Evidência da resposta");
+    // defaults to citation c1
+    expect(within(bench).getByText("docs/development/local.md")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Inspecionar evidência c2" }));
+
+    expect(within(bench).getByText("frontend/README.md")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  test("mobile opens the evidence sheet on citation click", async () => {
+    setViewport(false);
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    await user.click(await screen.findByRole("button", { name: "Inspecionar evidência c2" }));
+
+    expect(await screen.findByRole("dialog", { name: "Evidência para citação c2" })).toBeVisible();
+  });
+
+  test("mobile opens the evidence sheet for an answered-but-empty refusal", async () => {
+    setViewport(false);
+    askDocsMock.mockResolvedValueOnce(answeredButEmptyResponse());
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  test("moves focus to the inline error when a query fails", async () => {
+    askDocsMock.mockRejectedValueOnce(new Error("Falha na consulta"));
+    render(<ChatShell />);
+
+    await submitQuestion();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Falha na consulta");
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  test("moves focus to the inline error when feedback submission fails", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    sendQueryFeedbackMock.mockRejectedValueOnce(new Error("Erro de feedback"));
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    const helpful = await screen.findByRole("button", { name: "Marcar resposta como útil" });
+    await user.click(helpful);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Erro de feedback");
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  test("does not re-send feedback when the already-selected thumb is clicked again", async () => {
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    const helpful = await screen.findByRole("button", { name: "Marcar resposta como útil" });
+
+    await user.click(helpful);
+    expect(sendQueryFeedbackMock).toHaveBeenCalledTimes(1);
+
+    await user.click(helpful);
+    expect(sendQueryFeedbackMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Obrigado pelo retorno")).toBeVisible();
   });
 });

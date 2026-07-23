@@ -7,7 +7,8 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   resolve: {
     alias: {
-      "@": rootDir
+      "@": rootDir,
+      "next/font/google": `${rootDir}/test/mocks/next-font-google.ts`
     }
   },
   test: {
