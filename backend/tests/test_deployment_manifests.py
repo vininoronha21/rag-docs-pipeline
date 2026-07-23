@@ -131,3 +131,11 @@ def test_deployment_docs_cover_neon_tls_migrations_vercel_root_and_exact_cors() 
     assert "your-render-service" not in docs
     assert "your-vercel-project" not in docs
     assert "*" not in docs
+
+
+def test_frontend_ci_runs_typecheck_tests_and_build() -> None:
+    ci = _read(".github/workflows/ci.yml")
+
+    assert "npm run typecheck" in ci
+    assert "npm run test:run" in ci
+    assert "npm run build" in ci

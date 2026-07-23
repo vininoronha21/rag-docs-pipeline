@@ -3,6 +3,13 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 
+PRODUCTION_SETTINGS = {
+    "environment": "production",
+    "admin_secret": "production-secret",
+    "database_url": "postgresql+asyncpg://user:pass@db.example.com:5432/rag?ssl=require",
+    "migration_database_url": "postgresql+psycopg://user:pass@db.example.com:5432/rag?sslmode=require",
+}
+
 
 def test_settings_default_embedding_dimensions_are_positive() -> None:
     settings = Settings(_env_file=None)
@@ -65,3 +72,27 @@ def test_settings_hybrid_retrieval_defaults_are_valid() -> None:
 def test_settings_reject_invalid_hybrid_retrieval_values(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
         Settings(**{field: value}, _env_file=None)
+
+
+def test_production_requires_explicit_allowed_origins() -> None:
+    with pytest.raises(ValidationError, match="ALLOWED_ORIGINS must be set"):
+        Settings(**PRODUCTION_SETTINGS, _env_file=None)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["*", "http://localhost:3000", "http://127.0.0.1:3000"],
+)
+def test_production_rejects_wildcard_and_local_allowed_origins(origin: str) -> None:
+    with pytest.raises(ValidationError, match="ALLOWED_ORIGINS"):
+        Settings(**PRODUCTION_SETTINGS, allowed_origins=[origin], _env_file=None)
+
+
+def test_production_accepts_explicit_https_allowed_origin() -> None:
+    settings = Settings(
+        **PRODUCTION_SETTINGS,
+        allowed_origins=["https://docs.example.com"],
+        _env_file=None,
+    )
+
+    assert settings.allowed_origins == ["https://docs.example.com"]

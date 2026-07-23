@@ -41,16 +41,21 @@ class GithubClient:
     _sleep: Callable[[float], Awaitable[None]] = staticmethod(asyncio.sleep)
 
     def __init__(self, settings: Settings) -> None:
-        headers = {
+        api_headers = {
             "Accept": "application/vnd.github+json",
             "User-Agent": settings.github_user_agent,
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if settings.github_token:
-            headers["Authorization"] = f"Bearer {settings.github_token}"
+            api_headers["Authorization"] = f"Bearer {settings.github_token}"
         self._client = httpx.AsyncClient(
             base_url="https://api.github.com",
-            headers=headers,
+            headers=api_headers,
+            follow_redirects=True,
+            timeout=settings.http_timeout_seconds,
+        )
+        self._raw_client = httpx.AsyncClient(
+            headers={"User-Agent": settings.github_user_agent},
             follow_redirects=True,
             timeout=settings.http_timeout_seconds,
         )
@@ -65,8 +70,18 @@ class GithubClient:
             sleep=self._sleep,
         )
 
+    async def _get_raw(self, *args: Any, **kwargs: Any) -> httpx.Response:
+        return await request_with_retry(
+            lambda: self._raw_client.get(*args, **kwargs),
+            max_retries=self._max_retries,
+            backoff_seconds=self._backoff_seconds,
+            sleep=self._sleep,
+        )
+
     async def close(self) -> None:
         await self._client.aclose()
+        if self._raw_client is not self._client:
+            await self._raw_client.aclose()
 
     async def get_repo(self, repo_url: str) -> GithubRepo:
         owner, name = parse_repo_url(repo_url)
@@ -154,7 +169,7 @@ class GithubClient:
                 f"https://raw.githubusercontent.com/{quote(repo.owner, safe='')}/"
                 f"{quote(repo.name, safe='')}/{commit_sha}/{encoded_path}"
             )
-            raw = await self._get(entry_download_url)
+            raw = await self._get_raw(entry_download_url)
             raw.raise_for_status()
             try:
                 content = raw.content.decode("utf-8", errors="strict")

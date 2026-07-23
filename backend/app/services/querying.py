@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.services.embeddings import EmbeddingProvider
 from app.services.rag import (
     ExtractiveAnswer,
+    answer_has_query_term_support,
     build_extractive_answer,
     filter_chunks_by_min_score,
     filter_prompt_injection_chunks,
@@ -108,7 +109,15 @@ async def run_query(
         chunk.id in used_chunk_ids and chunk.text_score is not None and chunk.text_score > 0
         for chunk in chunks
     )
-    state: EvidenceState = "answered" if has_lexical_support else "insufficient_evidence"
+    has_sentence_support = (
+        candidate_answer is not None
+        and answer_has_query_term_support(question, candidate_answer)
+    )
+    state: EvidenceState = (
+        "answered"
+        if has_sentence_support or has_lexical_support
+        else "insufficient_evidence"
+    )
     answer = candidate_answer if state == "answered" else None
     evidence = (
         _build_answer_evidence(answer, chunks)

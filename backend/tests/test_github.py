@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from app.core.config import Settings
 from app.services.github import (
     GithubClient,
     GithubClientError,
@@ -59,12 +60,14 @@ class SleepRecorder:
 def make_client(fake_http_client: FakeGithubHttpClient) -> GithubClient:
     client = GithubClient.__new__(GithubClient)
     client._client = fake_http_client
+    client._raw_client = fake_http_client
     return client
 
 
 def make_retrying_client(responses: list[FakeResponse], recorder: SleepRecorder) -> GithubClient:
     client = GithubClient.__new__(GithubClient)
     client._client = FakeGithubHttpClient(responses)
+    client._raw_client = client._client
     client._max_retries = 3
     client._backoff_seconds = 0.5
     client._sleep = recorder.sleep
@@ -78,6 +81,16 @@ def make_repo() -> GithubRepo:
         full_name="example/project",
         default_branch="main",
     )
+
+
+@pytest.mark.asyncio
+async def test_github_client_does_not_attach_token_to_raw_content_client() -> None:
+    client = GithubClient(Settings(github_token="github-secret", _env_file=None))
+    try:
+        assert client._client.headers["Authorization"] == "Bearer github-secret"
+        assert "Authorization" not in client._raw_client.headers
+    finally:
+        await client.close()
 
 
 @pytest.mark.parametrize(
@@ -148,6 +161,47 @@ async def test_resolves_branch_head_and_fetches_recursively_by_commit() -> None:
             ("/repos/example/project/contents/docs/reference",),
             {"params": {"ref": commit_sha}},
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_markdown_files_uses_unauthenticated_raw_content_client() -> None:
+    commit_sha = "f" * 40
+    api_client = FakeGithubHttpClient(
+        [
+            FakeResponse(
+                [
+                    {
+                        "type": "file",
+                        "path": "docs/index.md",
+                        "name": "index.md",
+                        "sha": "index-blob",
+                    }
+                ]
+            ),
+            FakeResponse(None, content=b"# API client content"),
+        ]
+    )
+    raw_client = FakeGithubHttpClient([FakeResponse(None, content=b"# Raw client content")])
+    client = make_client(api_client)
+    client._raw_client = raw_client
+
+    files = await client.fetch_markdown_files(
+        make_repo(), commit_sha=commit_sha, path="docs", max_files=50
+    )
+
+    assert [file.content for file in files] == ["# Raw client content"]
+    assert api_client.requests == [
+        (("/repos/example/project/contents/docs",), {"params": {"ref": commit_sha}}),
+    ]
+    assert raw_client.requests == [
+        (
+            (
+                "https://raw.githubusercontent.com/example/project/"
+                f"{commit_sha}/docs/index.md",
+            ),
+            {},
+        )
     ]
 
 

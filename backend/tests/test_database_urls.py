@@ -39,6 +39,7 @@ def test_production_preserves_driver_specific_tls_query_parameters() -> None:
         admin_secret="secret-for-tests",
         database_url=runtime_url,
         migration_database_url=migration_url,
+        allowed_origins=["https://docs.example.com"],
         _env_file=None,
     )
 

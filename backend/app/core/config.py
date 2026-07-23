@@ -148,12 +148,23 @@ class Settings(BaseSettings):
                 for field_name, env_name in (
                     ("database_url", "DATABASE_URL"),
                     ("migration_database_url", "MIGRATION_DATABASE_URL"),
+                    ("allowed_origins", "ALLOWED_ORIGINS"),
                 )
                 if field_name not in self.model_fields_set
             ]
             if missing:
                 raise ValueError(
                     f"{', '.join(missing)} must be set when ENVIRONMENT=production."
+                )
+            if any(
+                origin.strip() == "*"
+                or "localhost" in origin.lower()
+                or "127.0.0.1" in origin
+                for origin in self.allowed_origins
+            ):
+                raise ValueError(
+                    "ALLOWED_ORIGINS must not include wildcard or localhost origins "
+                    "when ENVIRONMENT=production."
                 )
         return self
 

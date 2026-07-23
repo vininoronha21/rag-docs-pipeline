@@ -68,6 +68,15 @@ class EvaluatedCase:
         return max(self.answer_sentence_count - self.validated_answer_sentence_count, 0)
 
     @property
+    def answerable_answered_with_citations(self) -> bool:
+        return (
+            self.case.answerable
+            and self.observed_state == self.case.expected_state == "answered"
+            and self.answer_sentence_count > 0
+            and self.answer_sentence_validation_failures == 0
+        )
+
+    @property
     def unsupported_refusal(self) -> bool:
         return (
             not self.case.answerable
@@ -89,6 +98,7 @@ class EvaluatedCase:
             "answer_sentence_count": self.answer_sentence_count,
             "validated_answer_sentence_count": self.validated_answer_sentence_count,
             "answer_sentence_validation_failures": self.answer_sentence_validation_failures,
+            "answerable_answered_with_citations": self.answerable_answered_with_citations,
             "answerable_top3_hit": self.answerable_top3_hit,
             "unsupported_refusal": self.unsupported_refusal,
         }
@@ -132,12 +142,17 @@ def evaluate(*, cases: list[EvaluatedCase], top_k: int = 3) -> EvaluationReport:
     answer_sentence_validation_failures = sum(
         result.answer_sentence_validation_failures for result in cases
     )
+    answerable_answered_with_citations = all(
+        not result.case.answerable or result.answerable_answered_with_citations
+        for result in cases
+    )
     passed = (
         answerable_total == ANSWERABLE_TOTAL
         and unsupported_total == UNSUPPORTED_TOTAL
         and answerable_top3_hits >= ANSWERABLE_TOP3_THRESHOLD
         and unsupported_refusals == UNSUPPORTED_REFUSAL_THRESHOLD
         and answer_sentence_validation_failures == 0
+        and answerable_answered_with_citations
     )
     return EvaluationReport(
         passed=passed,
