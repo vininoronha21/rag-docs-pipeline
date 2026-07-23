@@ -2,6 +2,7 @@ services:
   - type: web
     name: rag-docs-api
     runtime: docker
+    plan: free
     dockerContext: .
     dockerfilePath: ./backend/Dockerfile
     dockerCommand: 'sh -c "python -m alembic upgrade head && exec python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"'

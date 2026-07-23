@@ -9,6 +9,7 @@ Render deploys the backend from `render.yaml` with the Docker context at the
 repository root and `backend/Dockerfile` as the image definition.
 
 - Health check path: `/api/health`
+- Render plan: `free` (free tier; cold starts are expected)
 - Runtime port: `${PORT:-8000}`
 - Start command: `python -m alembic upgrade head` followed by one Uvicorn process
 - Runtime process: `python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`

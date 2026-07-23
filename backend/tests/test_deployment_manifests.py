@@ -46,6 +46,7 @@ def test_render_manifest_declares_health_start_command_and_secret_sources() -> N
     render = _read("render.yaml")
 
     assert "runtime: docker" in render
+    assert "plan: free" in render
     assert "healthCheckPath: /api/health" in render
     assert "python -m alembic upgrade head" in render
     assert "exec python -m uvicorn app.main:app" in render
@@ -88,5 +89,6 @@ def test_deployment_docs_cover_neon_tls_migrations_vercel_root_and_exact_cors() 
     assert "python -m alembic upgrade head" in docs
     assert "Project root: `frontend`" in docs
     assert "Build command: `npm run build`" in docs
+    assert "Render plan: `free`" in docs
     assert 'ALLOWED_ORIGINS=["https://your-vercel-project.vercel.app"]' in docs
     assert "*" not in docs
