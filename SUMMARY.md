@@ -70,7 +70,7 @@ The current privacy policy is intentionally narrow:
 ### Deployment
 
 - `render.yaml` defines the Render backend service, Dockerfile, startup migration command, health path, and required environment variables.
-- `frontend/vercel.json` defines the Vercel Next.js build with placeholder backend URL.
+- `frontend/vercel.json` defines the Vercel Next.js build and requires `NEXT_PUBLIC_BACKEND_URL` from the provider environment.
 - `docs/environment.md` and `docs/deployment.md` document Neon-compatible runtime/migration database URL split.
 - `scripts/smoke.sh` validates frontend availability, backend health/readiness, answered public query, unsupported public query, and unauthenticated admin `401` without printing response bodies.
 
@@ -137,10 +137,10 @@ PYENV_VERSION=3.12.13 PYTHONPATH=. python scripts/verify_pipeline.py
 Deployed smoke template:
 
 ```bash
-FRONTEND_URL=https://your-vercel-project.vercel.app \
-BACKEND_URL=https://your-render-service.onrender.com \
-SMOKE_ANSWERABLE_QUESTION='Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?' \
-SMOKE_UNSUPPORTED_QUESTION='Qual é a política de preços da FastAPI Cloud para planos Enterprise anuais?' \
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
 scripts/smoke.sh
 ```
 

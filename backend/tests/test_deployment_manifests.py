@@ -17,6 +17,7 @@ def test_backend_dockerfile_pins_python_and_runs_uvicorn_as_non_root_on_port_env
     assert re.search(r"^USER\s+app$", dockerfile, flags=re.MULTILINE)
     assert "python -m alembic upgrade head && exec python -m uvicorn" in dockerfile
     assert "--port ${PORT:-8000}" in dockerfile
+    assert "--no-access-log" in dockerfile
     assert "--port 8000" not in dockerfile
 
 
@@ -51,6 +52,7 @@ def test_render_manifest_declares_health_start_command_and_secret_sources() -> N
     assert "python -m alembic upgrade head" in render
     assert "exec python -m uvicorn app.main:app" in render
     assert "--port ${PORT:-8000}" in render
+    assert "--no-access-log" in render
     assert "key: ADMIN_SECRET" in render
     assert "generateValue: true" in render
     assert render.count("sync: false") >= 3
@@ -68,13 +70,15 @@ def test_render_manifest_declares_health_start_command_and_secret_sources() -> N
     assert "example_password" not in render
 
 
-def test_vercel_manifest_uses_frontend_build_and_public_render_url_placeholder() -> None:
+def test_vercel_manifest_requires_provider_backend_url_without_committed_placeholder() -> None:
     vercel = json.loads(_read("frontend/vercel.json"))
+    manifest = _read("frontend/vercel.json")
 
-    assert vercel["buildCommand"] == "npm run build"
     assert vercel["framework"] == "nextjs"
-    assert vercel["env"]["NEXT_PUBLIC_BACKEND_URL"].startswith("https://")
-    assert vercel["env"]["NEXT_PUBLIC_BACKEND_URL"].endswith(".onrender.com")
+    assert "NEXT_PUBLIC_BACKEND_URL" in vercel["buildCommand"]
+    assert "npm run build" in vercel["buildCommand"]
+    assert "env" not in vercel or "NEXT_PUBLIC_BACKEND_URL" not in vercel.get("env", {})
+    assert "your-render-service" not in manifest
 
 
 def test_deployment_docs_cover_neon_tls_migrations_vercel_root_and_exact_cors() -> None:
@@ -88,7 +92,9 @@ def test_deployment_docs_cover_neon_tls_migrations_vercel_root_and_exact_cors() 
     assert "MIGRATION_DATABASE_URL" in docs
     assert "python -m alembic upgrade head" in docs
     assert "Project root: `frontend`" in docs
-    assert "Build command: `npm run build`" in docs
+    assert "Build command:" in docs
+    assert "NEXT_PUBLIC_BACKEND_URL" in docs
     assert "Render plan: `free`" in docs
-    assert 'ALLOWED_ORIGINS=["https://your-vercel-project.vercel.app"]' in docs
+    assert "your-render-service" not in docs
+    assert "your-vercel-project" not in docs
     assert "*" not in docs

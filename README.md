@@ -158,7 +158,7 @@ Latest recorded release evidence after this docs refresh:
 
 ## Deployed Demo
 
-Use placeholders until real Render/Vercel URLs are provisioned. Do not commit deployed URLs or secrets.
+Do not commit deployed URLs or secrets. Configure provider environment values before deploying.
 
 Render backend:
 
@@ -171,16 +171,16 @@ Vercel frontend:
 
 ```bash
 # frontend/vercel.json defines the Next.js build.
-# Replace https://your-render-service.onrender.com in the provider environment.
+# Set NEXT_PUBLIC_BACKEND_URL in the Vercel project environment before building.
 ```
 
 Post-deploy smoke:
 
 ```bash
-FRONTEND_URL=https://your-vercel-project.vercel.app \
-BACKEND_URL=https://your-render-service.onrender.com \
-SMOKE_ANSWERABLE_QUESTION='Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?' \
-SMOKE_UNSUPPORTED_QUESTION='Qual é a política de preços da FastAPI Cloud para planos Enterprise anuais?' \
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
 scripts/smoke.sh
 ```
 

@@ -12,7 +12,8 @@ repository root and `backend/Dockerfile` as the image definition.
 - Render plan: `free` (free tier; cold starts are expected)
 - Runtime port: `${PORT:-8000}`
 - Start command: `python -m alembic upgrade head` followed by one Uvicorn process
-- Runtime process: `python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`
+- Runtime process: `python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log`
+- Access logs: disabled with `--no-access-log` so client addresses and request paths are not retained by Uvicorn.
 
 Set these Render environment variables before the first deploy:
 
@@ -63,12 +64,13 @@ frontend directory.
 
 - Project root: `frontend`
 - Install command: `npm ci`
-- Build command: `npm run build`
-- Public backend URL: `https://your-render-service.onrender.com`
+- Build command: `test -n "$NEXT_PUBLIC_BACKEND_URL" || (printf 'NEXT_PUBLIC_BACKEND_URL must be set in the Vercel project environment.\n' >&2; exit 1); npm run build`
+- Public backend URL: configure `NEXT_PUBLIC_BACKEND_URL` in the Vercel project environment.
 
 Set `NEXT_PUBLIC_BACKEND_URL` before building. It is public and is baked into
-the Next.js client bundle during `npm run build`. Replace the placeholder in
-`frontend/vercel.json` or set the same value in the Vercel project environment.
+the Next.js client bundle during `npm run build`. `frontend/vercel.json`
+intentionally does not commit a value and its build command fails when the
+provider environment is missing the variable.
 
 ## Production CORS
 
@@ -77,7 +79,7 @@ wildcard origin and do not include preview URLs unless they are intentionally
 approved.
 
 ```text
-ALLOWED_ORIGINS=["https://your-vercel-project.vercel.app"]
+ALLOWED_ORIGINS=["<vercel-production-origin>"]
 ```
 
 The URL must include the scheme, host, and any non-default port. Do not include

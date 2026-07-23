@@ -102,14 +102,14 @@ npm --prefix frontend run build
 
 - Backend deploys to Render from `render.yaml` using `backend/Dockerfile`, `/api/health`, generated `ADMIN_SECRET`, and explicit `DATABASE_URL`/`MIGRATION_DATABASE_URL` secrets.
 - Database deploys to Neon or another PostgreSQL provider with pgvector enabled and driver-specific TLS parameters.
-- Frontend deploys to Vercel from `frontend/vercel.json` with `NEXT_PUBLIC_BACKEND_URL` set to the Render backend URL.
-- Post-deploy smoke uses placeholders until real URLs exist:
+- Frontend deploys to Vercel from `frontend/vercel.json` with `NEXT_PUBLIC_BACKEND_URL` supplied by the Vercel project environment.
+- Post-deploy smoke uses caller-supplied deployed origins and smoke questions:
 
 ```bash
-FRONTEND_URL=https://your-vercel-project.vercel.app \
-BACKEND_URL=https://your-render-service.onrender.com \
-SMOKE_ANSWERABLE_QUESTION='Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?' \
-SMOKE_UNSUPPORTED_QUESTION='Qual é a política de preços da FastAPI Cloud para planos Enterprise anuais?' \
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
 scripts/smoke.sh
 ```
 

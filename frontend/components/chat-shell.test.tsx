@@ -179,6 +179,15 @@ describe("ChatShell", () => {
     await waitFor(() => expect(screen.getByLabelText("Pergunta para a documentação")).toBeEnabled());
   });
 
+  test("mirrors the backend question length limit in the public composer", async () => {
+    render(<ChatShell />);
+
+    const input = screen.getByLabelText("Pergunta para a documentação");
+
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveAttribute("maxLength", "1000");
+  });
+
   test("bounds cold-start readiness polling and exposes a retry path", async () => {
     vi.useFakeTimers();
     checkReadinessMock.mockResolvedValue(wakingResponse);

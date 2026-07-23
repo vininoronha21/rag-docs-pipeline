@@ -39,7 +39,7 @@
    - Set Vercel `NEXT_PUBLIC_BACKEND_URL` to the Render backend URL.
 
 2. Run post-deploy smoke.
-   - Use placeholder-shaped commands only in docs.
+   - Supply deployed origins and smoke questions from a secure local shell or GitHub environment secrets.
    - Run `scripts/smoke.sh` with `FRONTEND_URL`, `BACKEND_URL`, `SMOKE_ANSWERABLE_QUESTION`, and `SMOKE_UNSUPPORTED_QUESTION` supplied from a secure local shell or GitHub environment secrets.
 
 3. Retry Docker runtime verification.
@@ -70,10 +70,10 @@ PYENV_VERSION=3.12.13 PYTHONPATH=. python scripts/verify_pipeline.py
 Post-deploy smoke template:
 
 ```bash
-FRONTEND_URL=https://your-vercel-project.vercel.app \
-BACKEND_URL=https://your-render-service.onrender.com \
-SMOKE_ANSWERABLE_QUESTION='Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?' \
-SMOKE_UNSUPPORTED_QUESTION='Qual é a política de preços da FastAPI Cloud para planos Enterprise anuais?' \
+FRONTEND_URL='<frontend-origin>' \
+BACKEND_URL='<backend-origin>' \
+SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
+SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
 scripts/smoke.sh
 ```
 

@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import DocSource, Document, DocumentChunk, QueryEvent, SourceVersion
 from app.services.chunking import Chunk
@@ -39,6 +40,8 @@ class RetrievedChunk:
 class AnalyticsSummary:
     document_count: int
     chunk_count: int
+    active_document_count: int
+    active_chunk_count: int
     source_count: int
     enabled_source_count: int
     query_count: int
@@ -224,7 +227,11 @@ async def promote_source_version(
 
 
 async def list_doc_sources(session: AsyncSession) -> list[DocSource]:
-    result = await session.scalars(select(DocSource).order_by(DocSource.last_sync.desc()))
+    result = await session.scalars(
+        select(DocSource)
+        .options(selectinload(DocSource.active_version))
+        .order_by(DocSource.last_sync.desc())
+    )
     return list(result.all())
 
 
@@ -234,7 +241,11 @@ async def update_doc_source_enabled(
     source_id: int,
     enabled: bool,
 ) -> DocSource | None:
-    source = await session.get(DocSource, source_id)
+    source = await session.scalar(
+        select(DocSource)
+        .options(selectinload(DocSource.active_version))
+        .where(DocSource.id == source_id)
+    )
     if source is None:
         return None
     source.enabled = enabled
@@ -245,6 +256,18 @@ async def update_doc_source_enabled(
 async def get_analytics_summary(session: AsyncSession) -> AnalyticsSummary:
     document_count = await _count_rows(session, Document)
     chunk_count = await _count_rows(session, DocumentChunk)
+    active_document_count = await session.scalar(
+        select(func.coalesce(func.sum(SourceVersion.document_count), 0))
+        .select_from(DocSource)
+        .join(SourceVersion, DocSource.active_version_id == SourceVersion.id)
+        .where(DocSource.enabled.is_(True))
+    )
+    active_chunk_count = await session.scalar(
+        select(func.coalesce(func.sum(SourceVersion.chunk_count), 0))
+        .select_from(DocSource)
+        .join(SourceVersion, DocSource.active_version_id == SourceVersion.id)
+        .where(DocSource.enabled.is_(True))
+    )
     source_count = await _count_rows(session, DocSource)
     enabled_source_count = await session.scalar(
         select(func.count()).select_from(DocSource).where(DocSource.enabled.is_(True))
@@ -262,6 +285,8 @@ async def get_analytics_summary(session: AsyncSession) -> AnalyticsSummary:
     return AnalyticsSummary(
         document_count=document_count,
         chunk_count=chunk_count,
+        active_document_count=int(active_document_count or 0),
+        active_chunk_count=int(active_chunk_count or 0),
         source_count=source_count,
         enabled_source_count=enabled_source_count or 0,
         query_count=query_count,

@@ -93,6 +93,10 @@ export type DocSource = {
   source_config: Record<string, unknown>;
   last_sync: string | null;
   enabled: boolean;
+  active_version_id: number | null;
+  active_commit_sha: string | null;
+  active_document_count: number | null;
+  active_chunk_count: number | null;
 };
 
 export type DocSourceListResponse = {
@@ -106,6 +110,8 @@ export type DocSourceUpdateRequest = {
 export type AnalyticsSummary = {
   document_count: number;
   chunk_count: number;
+  active_document_count: number;
+  active_chunk_count: number;
   source_count: number;
   enabled_source_count: number;
   query_count: number;

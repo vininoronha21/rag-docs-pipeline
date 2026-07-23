@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.observability import get_request_id, set_query_log_context
 from app.core.rate_limit import InMemoryRateLimiter
+from app.db.models import DocSource
 from app.db.session import get_session
 from app.schemas import (
     AnalyticsSummaryResponse,
@@ -90,6 +91,8 @@ async def analytics_summary(
     return AnalyticsSummaryResponse(
         document_count=summary.document_count,
         chunk_count=summary.chunk_count,
+        active_document_count=summary.active_document_count,
+        active_chunk_count=summary.active_chunk_count,
         source_count=summary.source_count,
         enabled_source_count=summary.enabled_source_count,
         query_count=summary.query_count,
@@ -193,16 +196,7 @@ def _embedding_provider_exception(exc: EmbeddingProviderError) -> HTTPException:
 async def doc_sources(session: AsyncSession = Depends(get_session)) -> DocSourceListResponse:
     sources = await list_doc_sources(session)
     return DocSourceListResponse(
-        items=[
-            DocSourceItem(
-                id=source.id,
-                source_type=source.source_type,
-                source_config=source.source_config,
-                last_sync=source.last_sync,
-                enabled=source.enabled,
-            )
-            for source in sources
-        ]
+        items=[_doc_source_item(source) for source in sources]
     )
 
 
@@ -222,12 +216,21 @@ async def update_doc_source(
             detail="Document source not found.",
         )
     await session.commit()
+    return _doc_source_item(source)
+
+
+def _doc_source_item(source: DocSource) -> DocSourceItem:
+    active_version = source.active_version
     return DocSourceItem(
         id=source.id,
         source_type=source.source_type,
         source_config=source.source_config,
         last_sync=source.last_sync,
         enabled=source.enabled,
+        active_version_id=active_version.id if active_version is not None else None,
+        active_commit_sha=active_version.commit_sha if active_version is not None else None,
+        active_document_count=active_version.document_count if active_version is not None else None,
+        active_chunk_count=active_version.chunk_count if active_version is not None else None,
     )
 
 

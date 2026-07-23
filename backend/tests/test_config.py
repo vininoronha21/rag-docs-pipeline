@@ -15,6 +15,11 @@ def test_settings_reject_non_positive_embedding_dimensions() -> None:
         Settings(embedding_dimensions=0, _env_file=None)
 
 
+def test_settings_reject_embedding_dimensions_that_do_not_match_pgvector_schema() -> None:
+    with pytest.raises(ValidationError, match="EMBEDDING_DIMENSIONS must remain 1536"):
+        Settings(embedding_dimensions=1024, _env_file=None)
+
+
 def test_settings_http_hardening_defaults() -> None:
     settings = Settings(_env_file=None)
 

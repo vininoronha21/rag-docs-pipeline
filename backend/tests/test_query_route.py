@@ -13,6 +13,19 @@ from app.services.querying import Evidence, QueryExecutionMetrics, QueryExecutio
 from app.services.rag import CitedSentence, ExtractiveAnswer
 
 
+def _query_validation_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    async def unexpected_run_query(*args: object, **kwargs: object) -> QueryExecutionResult:
+        pytest.fail("Oversized public query input should be rejected before retrieval.")
+
+    monkeypatch.setattr(routes, "run_query", unexpected_run_query)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api")
+    app.dependency_overrides[routes.get_session] = lambda: object()
+    app.dependency_overrides[routes.get_settings] = lambda: object()
+    app.dependency_overrides[routes.get_embedding_provider] = lambda: object()
+    return TestClient(app, raise_server_exceptions=False)
+
+
 def test_get_embedding_provider_returns_server_error_for_invalid_configuration() -> None:
     settings = Settings(embedding_provider="openai", openai_api_key=None, _env_file=None)
 
@@ -89,6 +102,26 @@ def test_query_history_route_is_absent() -> None:
 
     assert ("/queries", "GET") not in paths
     assert ("/query-events/{event_id}/feedback", "PATCH") in paths
+
+
+def test_query_route_rejects_oversized_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _query_validation_client(monkeypatch).post(
+        "/api/query",
+        json={"question": "x" * 1001, "top_k": 5},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"][0]["loc"][-1] == "question"
+
+
+def test_query_route_rejects_oversized_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _query_validation_client(monkeypatch).post(
+        "/api/query",
+        json={"question": "OK?", "top_k": 5, "source": "x" * 129},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json()["detail"][0]["loc"][-1] == "source"
 
 
 def test_query_route_returns_insufficient_evidence_as_http_200(
