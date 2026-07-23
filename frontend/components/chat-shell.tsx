@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Database, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
-import { EvidencePanel } from "@/components/evidence-panel";
+import { EvidenceBench, EvidencePanel } from "@/components/evidence-panel";
+import { useMediaQuery } from "@/lib/use-media-query";
 import { askDocs, checkReadiness, sendQueryFeedback } from "@/lib/api";
 import type { Evidence, PublicQueryResponse, QueryFeedback, ReadinessResponse } from "@/lib/api";
 
@@ -27,6 +28,9 @@ export function ChatShell() {
   const [evidencePanelOpen, setEvidencePanelOpen] = useState(false);
   const [panelEvidence, setPanelEvidence] = useState<Evidence[]>([]);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const errorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +102,15 @@ export function ChatShell() {
       const nextResponse = await askDocs(asked);
       setResponse(nextResponse);
 
-      if (nextResponse.insufficient_evidence) {
-        openEvidencePanel(nextResponse.evidence, nextResponse.evidence[0]?.citation_id ?? null);
+      const defaultCitation =
+        nextResponse.answer?.sentences[0]?.citation_id ??
+        nextResponse.evidence[0]?.citation_id ??
+        null;
+      setPanelEvidence(nextResponse.evidence);
+      setSelectedEvidenceId(defaultCitation);
+
+      if (nextResponse.insufficient_evidence && !isDesktop) {
+        setEvidencePanelOpen(true);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível consultar a documentação.");
@@ -123,79 +134,81 @@ export function ChatShell() {
     }
   }
 
-  function openEvidencePanel(evidence: Evidence[], citationId: string | null) {
+  function selectEvidence(evidence: Evidence[], citationId: string | null) {
     setPanelEvidence(evidence);
     setSelectedEvidenceId(citationId);
-    setEvidencePanelOpen(true);
+    if (!isDesktop) {
+      setEvidencePanelOpen(true);
+    }
   }
 
   return (
-    <main className="min-h-screen bg-surface text-ink">
-      <div className="mx-auto grid min-h-screen max-w-7xl grid-cols-1 lg:grid-cols-[340px_1fr]">
-        <aside className="border-b border-line bg-white/90 p-6 lg:border-b-0 lg:border-r">
-          <div className="mb-7">
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-md bg-accent text-white shadow-sm shadow-teal-900/10">
-              <Database size={20} aria-hidden="true" />
+    <main className="min-h-screen bg-paper text-ink">
+      <header className="border-b border-line bg-paper/95 px-4 py-3 sm:px-6">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-accent text-white">
+              <Database size={18} aria-hidden="true" />
             </div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
-              Bancada de evidências
-            </p>
-            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-ink">RAG Docs Pipeline</h1>
-            <p className="mt-3 text-sm leading-6 text-slate-600">
-              Faça uma pergunta sobre a documentação indexada e inspecione o trecho exato que sustenta
-              cada frase da resposta.
-            </p>
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-accent">
+                Bancada de evidências
+              </p>
+              <h1 className="font-serif text-lg font-semibold tracking-tight text-ink">
+                RAG Docs Pipeline
+              </h1>
+            </div>
           </div>
-
-          <section
-            aria-live="polite"
-            className="rounded-lg border border-line bg-slate-50 p-4 text-sm leading-6 text-slate-700"
-          >
-            <p className="font-medium text-ink">
-              {readinessState === "ready" ? "Pronto para consultar" : "Preparando consulta"}
-            </p>
-            <p className="mt-1">{readinessDetail}</p>
+          <div aria-live="polite" className="flex items-center gap-2 text-xs text-ink-soft">
+            <span
+              className={
+                readinessState === "ready"
+                  ? "h-2 w-2 rounded-full bg-accent"
+                  : readinessState === "blocked"
+                    ? "h-2 w-2 rounded-full bg-amber-500"
+                    : "h-2 w-2 animate-pulse rounded-full bg-slate-400"
+              }
+              aria-hidden="true"
+            />
+            <span>{readinessState === "ready" ? "API pronta" : "Preparando"}</span>
             {readinessState === "blocked" ? (
               <button
                 type="button"
                 onClick={() => setReadinessRun((current) => current + 1)}
-                className="mt-3 rounded-md border border-line bg-white px-3 py-2 text-sm font-medium text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+                className="ml-2 rounded-md border border-line bg-white px-2 py-1 font-medium text-ink outline-none hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
               >
                 Tentar novamente
               </button>
             ) : null}
-          </section>
+          </div>
+        </div>
+      </header>
 
-          {error ? (
+      <div className="mx-auto grid max-w-7xl grid-cols-1 lg:grid-cols-[1fr_minmax(380px,440px)]">
+        <section className="flex min-h-[calc(100vh-64px)] flex-col">
+          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
             <div
-              role="alert"
-              className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-700"
+              className="mx-auto flex max-w-3xl flex-col gap-5"
+              aria-live="polite"
+              aria-relevant="additions text"
             >
-              {error}
-            </div>
-          ) : null}
-        </aside>
-
-        <section className="flex min-h-screen flex-col">
-          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
-            <div className="mx-auto flex max-w-3xl flex-col gap-5" aria-live="polite" aria-relevant="additions text">
               {!submittedQuestion && !response ? (
-                <section className="mt-12 rounded-2xl border border-line bg-white p-6 shadow-sm shadow-slate-900/5 sm:mt-24 sm:p-8">
+                <section className="mt-10 rounded-2xl border border-line bg-white p-6 shadow-sm shadow-black/5 sm:p-8">
                   <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
                     Consulta pública
                   </p>
-                  <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink">
+                  <h2 className="mt-3 font-serif text-2xl font-semibold tracking-tight text-ink">
                     Pergunte. Leia a resposta. Abra a prova.
                   </h2>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-soft">
                     As respostas são extrativas: cada frase aponta para uma citação própria, e a
-                    inspeção abre o recorte original da documentação.
+                    evidência ao lado mostra o recorte original da documentação.
                   </p>
                 </section>
               ) : null}
 
               {submittedQuestion ? (
-                <article className="self-end rounded-2xl bg-accent px-4 py-3 text-sm leading-6 text-white shadow-sm shadow-teal-900/10">
+                <article className="self-end rounded-2xl bg-accent px-4 py-3 text-sm leading-6 text-white shadow-sm shadow-black/10">
                   <p className="text-xs font-medium uppercase tracking-[0.14em] text-teal-50/80">
                     Pergunta
                   </p>
@@ -204,7 +217,7 @@ export function ChatShell() {
               ) : null}
 
               {busy ? (
-                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-6 text-slate-700 shadow-sm shadow-slate-900/5">
+                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-6 text-ink-soft shadow-sm shadow-black/5">
                   <div className="flex items-center gap-2">
                     <Loader2 className="animate-spin text-accent" size={16} aria-hidden="true" />
                     Consultando o índice e preparando citações...
@@ -213,9 +226,9 @@ export function ChatShell() {
               ) : null}
 
               {response ? (
-                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-7 text-slate-800 shadow-sm shadow-slate-900/5 sm:px-5">
+                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-7 text-ink shadow-sm shadow-black/5 sm:px-5">
                   <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-line pb-3">
-                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
+                    <p className="font-serif text-sm font-semibold uppercase tracking-[0.14em] text-accent">
                       Resposta extraída
                     </p>
                     {isRefusal ? (
@@ -235,9 +248,10 @@ export function ChatShell() {
                           <span>{sentence.text}</span>{" "}
                           <button
                             type="button"
-                            onClick={() => openEvidencePanel(response.evidence, sentence.citation_id)}
-                            className="inline-flex translate-y-[-1px] items-center rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-xs font-semibold text-accent outline-none hover:border-accent/60 hover:bg-white focus-visible:ring-4 focus-visible:ring-accent/20"
+                            onClick={() => selectEvidence(response.evidence, sentence.citation_id)}
+                            className="inline-flex min-h-[24px] min-w-[24px] translate-y-[-1px] items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-xs font-semibold text-accent outline-none hover:border-accent/60 hover:bg-white focus-visible:ring-4 focus-visible:ring-accent/20"
                             aria-label={`Inspecionar evidência ${sentence.citation_id}`}
+                            aria-pressed={selectedEvidenceId === sentence.citation_id}
                           >
                             [{sentence.citation_id}]
                           </button>
@@ -249,37 +263,7 @@ export function ChatShell() {
                   </div>
 
                   {response && !isRefusal ? (
-                    <div className="mt-5 flex items-center gap-2 border-t border-line pt-3">
-                      <span className="mr-1 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
-                        Feedback
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void handleFeedback(1)}
-                        aria-label="Marcar resposta como útil"
-                        aria-pressed={feedback === 1}
-                        className={
-                          feedback === 1
-                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
-                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
-                        }
-                      >
-                        <ThumbsUp size={15} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleFeedback(-1)}
-                        aria-label="Marcar resposta como não útil"
-                        aria-pressed={feedback === -1}
-                        className={
-                          feedback === -1
-                            ? "flex h-8 w-8 items-center justify-center rounded-md bg-red-100 text-red-700 outline-none focus-visible:ring-4 focus-visible:ring-red-200"
-                            : "flex h-8 w-8 items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-accent/20"
-                        }
-                      >
-                        <ThumbsDown size={15} aria-hidden="true" />
-                      </button>
-                    </div>
+                    <FeedbackControls feedback={feedback} onFeedback={handleFeedback} />
                   ) : null}
                 </article>
               ) : null}
@@ -287,45 +271,121 @@ export function ChatShell() {
           </div>
 
           <form onSubmit={handleQuestion} className="border-t border-line bg-white/95 p-4">
-            <div className="mx-auto flex max-w-3xl flex-col gap-3 sm:flex-row sm:items-end">
-              <label className="flex-1 text-sm font-medium text-ink" htmlFor="public-question">
-                Pergunta para a documentação
-                <textarea
-                  id="public-question"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  maxLength={publicQuestionMaxLength}
-                  rows={2}
-                  disabled={!canAsk}
-                  placeholder={
-                    readinessState === "ready"
-                      ? "Ex.: Como executo o projeto localmente?"
-                      : "Aguarde a API ficar pronta para consultar."
-                  }
-                  className="mt-2 min-h-14 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm font-normal text-ink outline-none ring-accent/20 placeholder:text-slate-400 focus:ring-4 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={!canAsk || !question.trim()}
-                className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-white outline-none shadow-sm shadow-teal-900/10 hover:bg-teal-800 focus-visible:ring-4 focus-visible:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                aria-label="Enviar pergunta"
-              >
-                {busy ? <Loader2 className="animate-spin" size={18} aria-hidden="true" /> : <SendHorizonal size={18} aria-hidden="true" />}
-                <span>Enviar</span>
-              </button>
+            <div className="mx-auto flex max-w-3xl flex-col gap-3">
+              {error ? (
+                <div
+                  ref={errorRef}
+                  tabIndex={-1}
+                  role="alert"
+                  className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-700 outline-none"
+                >
+                  {error}
+                </div>
+              ) : null}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="flex-1 text-sm font-medium text-ink" htmlFor="public-question">
+                  Pergunta para a documentação
+                  <textarea
+                    id="public-question"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    maxLength={publicQuestionMaxLength}
+                    rows={2}
+                    disabled={!canAsk}
+                    placeholder={
+                      readinessState === "ready"
+                        ? "Ex.: Como executo o projeto localmente?"
+                        : "Aguarde a API ficar pronta para consultar."
+                    }
+                    className="mt-2 min-h-14 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm font-normal text-ink outline-none ring-accent/20 placeholder:text-ink-soft/60 focus:ring-4 disabled:cursor-not-allowed disabled:bg-paper disabled:text-ink-soft"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={!canAsk || !question.trim()}
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-white outline-none shadow-sm shadow-black/10 hover:bg-teal-800 focus-visible:ring-4 focus-visible:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                  aria-label="Enviar pergunta"
+                >
+                  {busy ? (
+                    <Loader2 className="animate-spin" size={18} aria-hidden="true" />
+                  ) : (
+                    <SendHorizonal size={18} aria-hidden="true" />
+                  )}
+                  <span>Enviar</span>
+                </button>
+              </div>
             </div>
           </form>
         </section>
+
+        {isDesktop ? (
+          <aside className="hidden min-h-[calc(100vh-64px)] border-l border-line lg:flex lg:flex-col">
+            {response ? (
+              <EvidenceBench evidence={panelEvidence} selectedId={selectedEvidenceId} />
+            ) : (
+              <div className="flex flex-1 flex-col justify-center gap-3 bg-bench px-6 py-10 text-sm leading-6 text-ink-soft">
+                <p className="font-serif text-base font-semibold text-ink">Como funciona</p>
+                <p>
+                  Cada resposta é extraída da documentação indexada. Toda frase carrega uma citação,
+                  e a prova aparece aqui: caminho, commit fixado e o trecho exato.
+                </p>
+              </div>
+            )}
+          </aside>
+        ) : null}
       </div>
 
-      <EvidencePanel
-        open={evidencePanelOpen}
-        onOpenChange={setEvidencePanelOpen}
-        evidence={panelEvidence}
-        selectedId={selectedEvidenceId}
-      />
+      {!isDesktop ? (
+        <EvidencePanel
+          open={evidencePanelOpen}
+          onOpenChange={setEvidencePanelOpen}
+          evidence={panelEvidence}
+          selectedId={selectedEvidenceId}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function FeedbackControls({
+  feedback,
+  onFeedback
+}: {
+  feedback: QueryFeedback | null;
+  onFeedback: (next: QueryFeedback) => void;
+}) {
+  return (
+    <div className="mt-5 flex items-center gap-2 border-t border-line pt-3">
+      <span className="mr-1 text-xs font-medium uppercase tracking-[0.14em] text-ink-soft">
+        {feedback ? "Obrigado pelo retorno" : "Feedback"}
+      </span>
+      <button
+        type="button"
+        onClick={() => (feedback === 1 ? undefined : onFeedback(1))}
+        aria-label="Marcar resposta como útil"
+        aria-pressed={feedback === 1}
+        className={
+          feedback === 1
+            ? "flex h-11 w-11 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+            : "flex h-11 w-11 items-center justify-center rounded-md text-ink-soft outline-none hover:bg-paper focus-visible:ring-4 focus-visible:ring-accent/20"
+        }
+      >
+        <ThumbsUp size={16} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={() => (feedback === -1 ? undefined : onFeedback(-1))}
+        aria-label="Marcar resposta como não útil"
+        aria-pressed={feedback === -1}
+        className={
+          feedback === -1
+            ? "flex h-11 w-11 items-center justify-center rounded-md bg-red-100 text-red-700 outline-none focus-visible:ring-4 focus-visible:ring-red-200"
+            : "flex h-11 w-11 items-center justify-center rounded-md text-ink-soft outline-none hover:bg-paper focus-visible:ring-4 focus-visible:ring-accent/20"
+        }
+      >
+        <ThumbsDown size={16} aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 

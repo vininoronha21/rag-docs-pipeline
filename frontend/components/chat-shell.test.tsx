@@ -16,6 +16,19 @@ const askDocsMock = vi.mocked(askDocs);
 const checkReadinessMock = vi.mocked(checkReadiness);
 const sendQueryFeedbackMock = vi.mocked(sendQueryFeedback);
 
+function setViewport(isDesktop: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: isDesktop,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn()
+  })) as unknown as typeof window.matchMedia;
+}
+
 const readyResponse: ReadinessResponse = {
   status: "ready",
   database: "ok",
@@ -151,6 +164,7 @@ async function submitQuestion(question = "Como executo localmente?") {
 
 describe("ChatShell", () => {
   beforeEach(() => {
+    setViewport(true);
     askDocsMock.mockReset();
     checkReadinessMock.mockReset();
     sendQueryFeedbackMock.mockReset();
@@ -243,18 +257,11 @@ describe("ChatShell", () => {
     expect(within(secondSentence.closest("p") as HTMLElement).getByRole("button", {
       name: "Inspecionar evidência c2"
     })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Abrir fonte fixada no commit" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Inspecionar evidência c2" }));
-
-    const dialog = await screen.findByRole("dialog", { name: "Evidência para citação c2" });
-    expect(within(dialog).getByText("Inspeção da fonte")).toBeVisible();
-    expect(
-      within(dialog).getByText("Trecho exato usado para sustentar a frase da resposta.")
-    ).toBeVisible();
-    expect(within(dialog).getByRole("link", { name: "Abrir fonte fixada no commit" })).toBeVisible();
-    expect(within(dialog).getByText("frontend/README.md")).toBeVisible();
-    expect(within(dialog).queryByText("docs/development/local.md")).not.toBeInTheDocument();
+    const bench = screen.getByLabelText("Evidência da resposta");
+    expect(within(bench).getByText("frontend/README.md")).toBeVisible();
+    expect(within(bench).queryByText("docs/development/local.md")).not.toBeInTheDocument();
   });
 
   test("keeps sentence keys stable when multiple answer sentences cite the same evidence", async () => {
@@ -285,7 +292,8 @@ describe("ChatShell", () => {
     expect(
       await screen.findByText("Não encontrei evidências suficientes na documentação indexada para responder com segurança.")
     ).toBeVisible();
-    expect(await screen.findByRole("dialog", { name: "Evidência para citação c1" })).toBeVisible();
+    const bench = await screen.findByLabelText("Evidência da resposta");
+    expect(within(bench).getByText("docs/development/local.md")).toBeVisible();
   });
 
   test("shows the refusal badge and copy only for insufficient evidence, with no feedback controls", async () => {
@@ -338,5 +346,33 @@ describe("ChatShell", () => {
 
     await waitFor(() => expect(helpful).toHaveAttribute("aria-pressed", "false"));
     expect(screen.getByText("Feedback indisponível")).toBeVisible();
+  });
+
+  test("desktop shows the persistent evidence bench and switches it on citation click without a dialog", async () => {
+    setViewport(true);
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+
+    const bench = await screen.findByLabelText("Evidência da resposta");
+    // defaults to citation c1
+    expect(within(bench).getByText("docs/development/local.md")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Inspecionar evidência c2" }));
+
+    expect(within(bench).getByText("frontend/README.md")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  test("mobile opens the evidence sheet on citation click", async () => {
+    setViewport(false);
+    askDocsMock.mockResolvedValueOnce(answeredResponse());
+    render(<ChatShell />);
+
+    const user = await submitQuestion();
+    await user.click(await screen.findByRole("button", { name: "Inspecionar evidência c2" }));
+
+    expect(await screen.findByRole("dialog", { name: "Evidência para citação c2" })).toBeVisible();
   });
 });
