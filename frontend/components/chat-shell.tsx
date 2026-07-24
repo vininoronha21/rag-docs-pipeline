@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Database, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Database, DatabaseZap, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
 import { EvidenceBench, EvidencePanel } from "@/components/evidence-panel";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { askDocs, checkReadiness, sendQueryFeedback } from "@/lib/api";
@@ -163,33 +163,42 @@ export function ChatShell() {
               </h1>
             </div>
           </div>
-          <div aria-live="polite" className="flex items-center gap-2 text-xs text-ink-soft">
-            <span
-              className={
-                readinessState === "ready"
-                  ? "h-2 w-2 rounded-full bg-accent"
-                  : readinessState === "blocked"
-                    ? "h-2 w-2 rounded-full bg-amber-500"
-                    : "h-2 w-2 animate-pulse rounded-full bg-slate-400"
-              }
-              aria-hidden="true"
-            />
-            <span>{readinessState === "ready" ? "API pronta" : "Preparando"}</span>
-            <span className="sr-only">{readinessDetail}</span>
-            {readinessState === "blocked" ? (
-              <button
-                type="button"
-                onClick={() => setReadinessRun((current) => current + 1)}
-                className="ml-2 rounded-md border border-line bg-white px-2 py-1 font-medium text-ink outline-none hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
-              >
-                Tentar novamente
-              </button>
-            ) : null}
+          <div className="flex items-center gap-3">
+            <a
+              href="/admin"
+              className="hidden h-9 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-xs font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20 sm:inline-flex"
+            >
+              <DatabaseZap size={15} aria-hidden="true" />
+              Gerenciar fontes
+            </a>
+            <div aria-live="polite" className="flex items-center gap-2 text-xs text-ink-soft">
+              <span
+                className={
+                  readinessState === "ready"
+                    ? "h-2 w-2 rounded-full bg-accent"
+                    : readinessState === "blocked"
+                      ? "h-2 w-2 rounded-full bg-amber-500"
+                      : "h-2 w-2 animate-pulse rounded-full bg-slate-400"
+                }
+                aria-hidden="true"
+              />
+              <span>{readinessState === "ready" ? "API pronta" : "Preparando"}</span>
+              <span className="sr-only">{readinessDetail}</span>
+              {readinessState === "blocked" ? (
+                <button
+                  type="button"
+                  onClick={() => setReadinessRun((current) => current + 1)}
+                  className="ml-2 rounded-md border border-line bg-white px-2 py-1 font-medium text-ink outline-none hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+                >
+                  Tentar novamente
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-7xl grid-cols-1 lg:grid-cols-[1fr_minmax(380px,440px)]">
+      <div className="mx-auto grid max-w-7xl grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="flex min-h-[calc(100vh-64px)] flex-col">
           <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
             <div
@@ -209,6 +218,18 @@ export function ChatShell() {
                     As respostas são extrativas: cada frase aponta para uma citação própria, e a
                     evidência ao lado mostra o recorte original da documentação.
                   </p>
+                  <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <a
+                      href="/admin"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-sm font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+                    >
+                      <DatabaseZap size={16} aria-hidden="true" />
+                      Registrar repositório Markdown
+                    </a>
+                    <p className="text-xs leading-5 text-ink-soft">
+                      A consulta pública usa somente fontes já sincronizadas.
+                    </p>
+                  </div>
                 </section>
               ) : null}
 
@@ -328,12 +349,14 @@ export function ChatShell() {
             {response ? (
               <EvidenceBench evidence={panelEvidence} selectedId={selectedEvidenceId} />
             ) : (
-              <div className="flex flex-1 flex-col justify-center gap-3 bg-bench px-6 py-10 text-sm leading-6 text-ink-soft">
-                <p className="font-serif text-base font-semibold text-ink">Como funciona</p>
+              <div className="flex flex-1 flex-col justify-center bg-bench px-5 py-10 text-sm leading-6 text-ink-soft">
+                <div className="mx-auto w-full max-w-[280px]">
+                <p className="font-serif text-sm font-semibold text-ink">Como funciona</p>
                 <p>
                   Cada resposta é extraída da documentação indexada. Toda frase carrega uma citação,
                   e a prova aparece aqui: caminho, commit fixado e o trecho exato.
                 </p>
+                </div>
               </div>
             )}
           </aside>

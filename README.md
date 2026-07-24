@@ -66,9 +66,19 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm --prefix frontend run dev
 Open:
 
 - Frontend: `http://localhost:3000`
+- Source management: `http://localhost:3000/admin` using local secret `local-admin-secret`
 - Backend health: `http://localhost:8000/api/health`
 - Backend readiness: `http://localhost:8000/api/ready`
 - API docs: `http://localhost:8000/docs`
+
+Local workflow:
+
+1. Open `http://localhost:3000/admin`.
+2. Unlock with `local-admin-secret`.
+3. Register a GitHub repository URL, branch, and Markdown folder path.
+4. Return to `http://localhost:3000` and query the synchronized documentation.
+
+The public home only queries enabled sources that are already indexed. Repository registration is intentionally protected by `ADMIN_SECRET` because it triggers network requests, database writes, and embedding/indexing work.
 
 ## API Examples
 
@@ -164,7 +174,7 @@ Render backend:
 
 ```bash
 # render.yaml defines the web service, Dockerfile, health check, and generated ADMIN_SECRET.
-# Set DATABASE_URL, MIGRATION_DATABASE_URL, and ALLOWED_ORIGINS in Render.
+# Set DATABASE_URL, MIGRATION_DATABASE_URL, ADMIN_SECRET, and ALLOWED_ORIGINS in Render.
 ```
 
 Vercel frontend:
@@ -172,6 +182,7 @@ Vercel frontend:
 ```bash
 # frontend/vercel.json defines the Next.js build.
 # Set NEXT_PUBLIC_BACKEND_URL in the Vercel project environment before building.
+# Use the Render backend origin, for example https://<backend-service>.onrender.com.
 ```
 
 Post-deploy smoke:

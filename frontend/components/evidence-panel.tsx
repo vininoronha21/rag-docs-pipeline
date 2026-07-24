@@ -47,16 +47,16 @@ function EvidenceContent({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-line px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
+      <header className="shrink-0 border-b border-line px-4 py-4">
+        <div className="mx-auto flex w-full max-w-[300px] items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
+            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-accent">
               Inspeção da fonte
             </p>
-            <Title className="mt-2 font-serif text-lg font-semibold leading-6 text-ink">
+            <Title className="mt-2 font-serif text-base font-semibold leading-6 text-ink">
               Evidência para citação {citationLabel}
             </Title>
-            <Description className="mt-1 text-sm leading-6 text-ink-soft">
+            <Description className="mt-1 text-xs leading-5 text-ink-soft">
               Trecho exato usado para sustentar a frase da resposta.
             </Description>
           </div>
@@ -72,17 +72,18 @@ function EvidenceContent({
       <div
         role="region"
         aria-label="Detalhes da evidência"
-        className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
       >
-        <dl className="grid gap-3 rounded-md border border-line bg-paper p-4 text-sm">
+        <div className="mx-auto w-full max-w-[300px]">
+        <dl className="grid gap-2 rounded-md border border-line bg-paper p-3 text-xs leading-5">
           <Metadata label="Caminho">{selected.repository_path}</Metadata>
           {selected.section ? <Metadata label="Seção">{selected.section}</Metadata> : null}
           <Metadata label="Commit">{selected.commit_sha}</Metadata>
         </dl>
 
-        <section className="mt-5" aria-label="Trecho original">
-          <h3 className="text-sm font-semibold text-ink">Trecho original</h3>
-          <p className="mt-3 whitespace-pre-wrap rounded-md border border-line bg-white p-4 font-mono text-[13px] leading-6 text-ink">
+        <section className="mt-4" aria-label="Trecho original">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.08em] text-ink-soft">Trecho original</h3>
+          <p className="mt-2 whitespace-pre-wrap rounded-md border border-line bg-white p-3 font-mono text-[12px] leading-5 text-ink">
             {highlightSupportedText(selected.excerpt, selected.supported_text)}
           </p>
         </section>
@@ -91,11 +92,12 @@ function EvidenceContent({
           href={selected.source_url}
           target="_blank"
           rel="noreferrer"
-          className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm font-medium text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+          className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-xs font-medium text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
         >
           Abrir fonte fixada no commit
           <ExternalLink size={15} aria-hidden="true" />
         </a>
+        </div>
       </div>
     </div>
   );
@@ -154,8 +156,8 @@ export function EvidencePanel({ open, onOpenChange, evidence, selectedId }: Evid
 
 function Metadata({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[76px_1fr] sm:gap-3">
-      <dt className="text-xs font-medium uppercase tracking-[0.14em] text-ink-soft">{label}</dt>
+    <div className="grid gap-1 sm:grid-cols-[64px_1fr] sm:gap-2">
+      <dt className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-soft">{label}</dt>
       <dd className="min-w-0 break-words font-medium text-ink">{children}</dd>
     </div>
   );
