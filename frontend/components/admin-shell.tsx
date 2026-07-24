@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Activity, DatabaseZap, Loader2, LockKeyhole, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, ArrowLeft, DatabaseZap, Loader2, LockKeyhole, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   adminGetAnalyticsSummary,
   adminIngestGithub,
@@ -249,14 +249,23 @@ export function AdminShell() {
                     <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">Operação protegida</p>
                     <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink">Controle de fontes</h2>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-sm font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
-                  >
-                    <LogOut size={16} aria-hidden="true" />
-                    Encerrar sessão administrativa
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href="/"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-sm font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+                    >
+                      <ArrowLeft size={16} aria-hidden="true" />
+                      Voltar para consulta
+                    </a>
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-sm font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
+                    >
+                      <LogOut size={16} aria-hidden="true" />
+                      Encerrar sessão administrativa
+                    </button>
+                  </div>
                 </div>
 
                 {loadError ? (

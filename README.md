@@ -1,191 +1,70 @@
-# RAG for Documentation - AI-Ready Data Pipeline
+# RAG Docs Pipeline
 
-Portfolio RAG application for GitHub Markdown documentation. It ingests versioned FastAPI PT-BR docs, chunks and embeds them, stores vectors in PostgreSQL with pgvector, retrieves with hybrid vector/full-text search, and answers public questions with citation-first, commit-pinned evidence.
+Transforme documentacao Markdown de repositorios GitHub em uma experiencia de busca com IA, respostas diretas e evidencias verificaveis.
 
-## Current Release
+O RAG Docs Pipeline foi criado para resolver um problema comum em projetos reais: documentacoes grandes, espalhadas e dificeis de consultar. Em vez de procurar manualmente por arquivos, secoes e commits, o usuario pergunta em linguagem natural e recebe uma resposta apoiada por trechos reais da fonte.
 
-- Backend: FastAPI monolith with SQLAlchemy async, Alembic, PostgreSQL 15, pgvector, readiness checks, structured request logging, and in-memory rate limits.
-- Ingestion: GitHub Markdown under admin-only `/api/admin/ingest/github`, tracked by `DocSource` and immutable `SourceVersion` rows keyed by repository, branch, path, and commit SHA.
-- Retrieval: hybrid pgvector cosine search plus PostgreSQL full-text search, fused with reciprocal-rank fusion and filtered by enabled source/version and score thresholds.
-- Answers: local extractive fallback by default, citation-first response shape, prompt-injection-like chunk filtering, unsupported-question refusal via `state="insufficient_evidence"`.
-- Privacy: anonymous `query_events` only. The app does not persist visitor question text, answer text, citation snapshots, IP addresses, user agents, or public query history.
-- Frontend: Next.js 16.2.11 citation-first chat and protected admin shell. Latest recorded frontend checks from Task 4 passed typecheck, build, and 22 Vitest tests with `npm audit` clean.
-- Deployment: Render backend manifest, Vercel frontend manifest, Neon-compatible async/sync database URL split, and `scripts/smoke.sh` for post-deploy smoke checks.
+## Visao do Produto
 
-## Public And Admin API
+A proposta e simples: conectar um repositorio, indexar seus arquivos Markdown e consultar esse conhecimento com seguranca.
 
-Public endpoints:
+Cada resposta mostra de onde veio a informacao, incluindo caminho do arquivo, commit fixado e trecho original. Isso torna a experiencia mais confiavel do que um chatbot generico, porque a resposta nao fica solta: ela vem acompanhada da prova.
 
-- `GET /api/health`
-- `GET /api/ready`
-- `POST /api/query`
-- `PATCH /api/query-events/{uuid}/feedback`
+## O Que Ele Entrega
 
-Bearer-protected admin endpoints:
+- Consulta inteligente sobre documentacao Markdown.
+- Painel administrativo para registrar e sincronizar repositorios GitHub.
+- Respostas com citacoes e evidencias auditaveis.
+- Busca hibrida combinando vetores e texto.
+- Interface publica para perguntas e painel protegido para gerenciar fontes.
+- Execucao local com Docker, sem depender de infraestrutura paga.
 
-- `POST /api/admin/ingest/github`
-- `GET /api/admin/sources`
-- `PATCH /api/admin/sources/{id}`
-- `GET /api/admin/analytics/summary`
+## Por Que E Diferente
 
-There is no public ingestion endpoint, public source-management endpoint, or public query-history endpoint in the current release.
+O foco nao e apenas "perguntar para uma IA". O diferencial esta em criar uma base de conhecimento rastreavel, onde cada resposta pode ser conferida na fonte original.
 
-## Local Demo
+Isso aproxima o projeto de casos reais de uso em empresas: documentacao interna, manuais tecnicos, bases de suporte, guias de produto e repositorios com conhecimento espalhado.
 
-Start PostgreSQL, install backend dependencies, migrate, and ingest the release corpus:
+## Como Funciona
+
+1. O administrador registra um repositorio GitHub no painel protegido.
+2. O sistema coleta os arquivos Markdown do caminho escolhido.
+3. O conteudo e dividido, indexado e salvo em PostgreSQL com pgvector.
+4. O usuario faz perguntas pelo frontend publico.
+5. A resposta retorna com evidencias, citacoes e links para a fonte.
+
+## Rodando Localmente
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres
-PYENV_VERSION=3.12.13 python -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-cd backend
-python -m alembic upgrade head
-PYTHONPATH=. python -m app.cli ingest-github \
-  https://github.com/fastapi/fastapi \
-  docs/pt/docs \
-  --branch master \
-  --max-files 500
-PYTHONPATH=. python scripts/verify_pipeline.py
+docker compose up --build -d
 ```
 
-Run the backend and frontend locally:
+Acesse:
 
-```bash
-# terminal 1
-source .venv/bin/activate
-cd backend
-uvicorn app.main:app --reload
+- Aplicacao: `http://localhost:3000`
+- Painel de fontes: `http://localhost:3000/admin`
+- Segredo local do admin: `local-admin-secret`
+- API: `http://localhost:8000/docs`
 
-# terminal 2
-npm --prefix frontend install
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm --prefix frontend run dev
-```
+Fluxo recomendado:
 
-Open:
+1. Abra `http://localhost:3000/admin`.
+2. Desbloqueie com `local-admin-secret`.
+3. Registre a URL do repositorio, branch e caminho dos Markdown.
+4. Volte para `http://localhost:3000` e consulte a documentacao.
 
-- Frontend: `http://localhost:3000`
-- Backend health: `http://localhost:8000/api/health`
-- Backend readiness: `http://localhost:8000/api/ready`
-- API docs: `http://localhost:8000/docs`
+## Stack
 
-## API Examples
+- Frontend: Next.js
+- Backend: FastAPI
+- Banco: PostgreSQL + pgvector
+- Migrations: Alembic
+- Containerizacao: Docker Compose
+- Busca: recuperacao hibrida com evidencias por commit
 
-Admin ingestion requires `Authorization: Bearer <ADMIN_SECRET>`:
+## Status
 
-```bash
-curl -X POST http://localhost:8000/api/admin/ingest/github \
-  -H "Authorization: Bearer $ADMIN_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"repo_url":"https://github.com/fastapi/fastapi","branch":"master","path":"docs/pt/docs","max_files":500}'
-```
+Este projeto esta pronto como demo local e portfolio tecnico. Ele demonstra uma arquitetura completa de ingestao, indexacao, recuperacao e consulta com evidencias.
 
-Public query:
-
-```bash
-curl -X POST http://localhost:8000/api/query \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Como passo o path do arquivo `main.py` para `fastapi dev` ou a opção `--entrypoint main:app` para ele deduzir o objeto da aplicação?","top_k":5,"source":"github"}'
-```
-
-Public feedback on the returned opaque event UUID:
-
-```bash
-curl -X PATCH http://localhost:8000/api/query-events/<event_uuid>/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"feedback":1}'
-```
-
-Protected source list:
-
-```bash
-curl http://localhost:8000/api/admin/sources \
-  -H "Authorization: Bearer $ADMIN_SECRET"
-```
-
-## Configuration
-
-Environment variables are documented in `.env.example` and `docs/environment.md`.
-
-Default local mode:
-
-```bash
-EMBEDDING_PROVIDER=local
-LLM_PROVIDER=extractive
-RETRIEVAL_MIN_SCORE=0.0
-RETRIEVAL_MIN_FUSED_SCORE=0.0
-RETRIEVAL_MIN_SCORE_GAP=0.0
-```
-
-Production requires explicit runtime and migration URLs with different SQLAlchemy drivers:
-
-```bash
-DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>/<database>?ssl=require
-MIGRATION_DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>/<database>?sslmode=require
-```
-
-OpenAI embeddings are optional:
-
-```bash
-EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=<set-in-provider-dashboard>
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-```
-
-`LLM_PROVIDER=openai` and `OPENAI_CHAT_MODEL` exist in settings, but external LLM synthesis is not implemented yet. Extractive mode remains the safe default.
-
-## Verification
-
-Use these checks from the repository root:
-
-```bash
-git diff --check
-PYENV_VERSION=3.12.13 python -m ruff check backend
-PYENV_VERSION=3.12.13 python -m pytest backend/tests/test_verify_pipeline.py
-PYENV_VERSION=3.12.13 TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test python -m pytest backend/tests
-npm --prefix frontend run build
-```
-
-Latest recorded release evidence after this docs refresh:
-
-- Backend broad suite from Task 5: `273 passed`, with one existing Starlette warning.
-- Frontend from Task 4: 22 Vitest tests, typecheck, build, and `npm audit` passed after Next 16.2.11.
-- Evaluation gate after Task 4: `answerable_top3=14/16`, `unsupported_refusals=4/4`, `answer_sentence_validation_failures=0` on `evaluation/pt-br/questions.jsonl`.
-- Alembic: six migration files are present under `backend/alembic/versions`.
-
-`backend/scripts/verify_pipeline.py` now validates the PT-BR FastAPI source (`https://github.com/fastapi/fastapi`, branch `master`, path `docs/pt/docs`), `SourceVersion` integrity, active corpus counts, same-commit no-op sync, answered citations with commit-pinned GitHub URLs, anonymous query-event schema, disabled-source exclusion, and source restoration in `finally` blocks.
-
-## Deployed Demo
-
-Do not commit deployed URLs or secrets. Configure provider environment values before deploying.
-
-Render backend:
-
-```bash
-# render.yaml defines the web service, Dockerfile, health check, and generated ADMIN_SECRET.
-# Set DATABASE_URL, MIGRATION_DATABASE_URL, and ALLOWED_ORIGINS in Render.
-```
-
-Vercel frontend:
-
-```bash
-# frontend/vercel.json defines the Next.js build.
-# Set NEXT_PUBLIC_BACKEND_URL in the Vercel project environment before building.
-```
-
-Post-deploy smoke:
-
-```bash
-FRONTEND_URL='<frontend-origin>' \
-BACKEND_URL='<backend-origin>' \
-SMOKE_ANSWERABLE_QUESTION='<answerable-smoke-question>' \
-SMOKE_UNSUPPORTED_QUESTION='<unsupported-smoke-question>' \
-scripts/smoke.sh
-```
-
-## Release Blockers
-
-- Live deployed smoke is still pending real `FRONTEND_URL` and `BACKEND_URL` values.
-- Docker runtime verification from Task 3 was blocked by Docker Hub metadata timeout; retry when Docker Hub is reachable.
-- OpenAI embedding batching and external LLM synthesis are intentionally deferred.
+Para virar um SaaS publico multiusuario, ainda seriam necessarios autenticacao, cotas, filas, controle de custos e politicas mais fortes contra abuso. A versao atual foi desenhada para apresentar o produto de forma clara, funcional e verificavel em ambiente local.
