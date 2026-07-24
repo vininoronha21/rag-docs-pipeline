@@ -84,6 +84,7 @@ export function ChatShell() {
   const canAsk = readinessState === "ready" && !busy;
   const sentences = response?.answer?.sentences ?? [];
   const isRefusal = response !== null && (response.insufficient_evidence || sentences.length === 0);
+  const hasConversation = Boolean(submittedQuestion || response || busy);
 
   async function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,14 +155,9 @@ export function ChatShell() {
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-accent text-white">
               <Database size={18} aria-hidden="true" />
             </div>
-            <div>
-              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-accent">
-                Bancada de evidências
-              </p>
-              <h1 className="font-serif text-lg font-semibold tracking-tight text-ink">
-                RAG Docs Pipeline
-              </h1>
-            </div>
+            <h1 className="font-serif text-lg font-semibold tracking-tight text-ink">
+              RAG Docs Pipeline
+            </h1>
           </div>
           <div className="flex items-center gap-3">
             <a
@@ -200,25 +196,31 @@ export function ChatShell() {
 
       <div className="mx-auto grid max-w-7xl grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="flex min-h-[calc(100vh-64px)] flex-col">
-          <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+          <div
+            className={
+              hasConversation
+                ? "flex-1 overflow-y-auto px-4 py-6 sm:px-6"
+                : "flex flex-1 items-center justify-center overflow-y-auto px-4 py-8 sm:px-6"
+            }
+          >
             <div
               className="mx-auto flex max-w-3xl flex-col gap-5"
               aria-live="polite"
               aria-relevant="additions text"
             >
               {!submittedQuestion && !response ? (
-                <section className="mt-10 rounded-2xl border border-line bg-white p-6 shadow-sm shadow-black/5 sm:p-8">
+                <section className="rounded-2xl border border-line bg-white p-6 text-center shadow-sm shadow-black/5 sm:p-8">
                   <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
                     Consulta pública
                   </p>
                   <h2 className="mt-3 font-serif text-2xl font-semibold tracking-tight text-ink">
                     Pergunte. Leia a resposta. Abra a prova.
                   </h2>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-soft">
+                  <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-ink-soft">
                     As respostas são extrativas: cada frase aponta para uma citação própria, e a
                     evidência ao lado mostra o recorte original da documentação.
                   </p>
-                  <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
                     <a
                       href="/admin"
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 text-sm font-semibold text-ink outline-none hover:border-accent/50 hover:text-accent focus-visible:ring-4 focus-visible:ring-accent/20"
