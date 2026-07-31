@@ -10,7 +10,7 @@ A ideia nasceu de uma dor prática: pesquisar manualmente em uma documentação 
 
 O projeto conecta um repositório, cria uma base de conhecimento versionada e entrega respostas *citation-first*. Cada frase respondida aponta para um trecho real, com caminho do arquivo, seção, commit e link permanente para o GitHub. Quando o corpus não sustenta a pergunta, o sistema assume a ausência de evidência em vez de inventar uma resposta.
 
-![Consulta com resposta extraída e evidência vinculada](docs/images/02-query-with-evidence.png)
+![Consulta com resposta extraída e evidência vinculada](assets/02-query-with-evidence.png)
 
 ## O Que Ele Entrega
 
@@ -23,7 +23,7 @@ O projeto conecta um repositório, cria uma base de conhecimento versionada e en
 - Métricas operacionais sem persistir o texto das perguntas ou respostas.
 - Execução completa em Docker Compose, sem exigir serviços pagos no modo local.
 
-![Painel administrativo com métricas e fontes versionadas](docs/images/04-admin-dashboard.png)
+![Painel administrativo com métricas e fontes versionadas](assets/04-admin-dashboard.png)
 
 ## Por Que É Diferente
 
@@ -44,7 +44,7 @@ O modo padrão usa embeddings locais determinísticos e não depende de um LLM e
 
 A API também expõe contratos OpenAPI para saúde, prontidão, consultas, feedback e operações administrativas.
 
-![Documentação OpenAPI do backend FastAPI](docs/images/05-api-docs.png)
+![Documentação OpenAPI do backend FastAPI](assets/05-api-docs.png)
 
 ## Rodando Localmente
 

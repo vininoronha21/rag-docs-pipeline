@@ -79,7 +79,7 @@ The release privacy contract is intentionally strict:
 - Do not persist public request bodies.
 - Do not persist IP addresses or user agents.
 - Do not retain request paths in application or Uvicorn access logs.
-- Do not expose public query history.
+- Do not expose persisted or shared public query history.
 
 `query_events` stores only opaque operational telemetry: UUID, state, latency, retrieved count, source IDs, source version IDs, top fused score, score gap, optional feedback, and timestamp.
 
@@ -94,6 +94,7 @@ Additional privacy hardening:
 
 - Next.js 16.2.11 application.
 - Portuguese public UX for documentation questions.
+- Multi-question session thread kept only in browser memory and cleared on reload.
 - Citation-first answer layout with sentence-level citation IDs.
 - Evidence panel shows commit-pinned source links.
 - Feedback controls use opaque event UUIDs.

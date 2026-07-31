@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Database, DatabaseZap, Loader2, SendHorizonal, ThumbsDown, ThumbsUp } from "lucide-react";
 import { EvidenceBench, EvidencePanel } from "@/components/evidence-panel";
@@ -15,13 +15,18 @@ const refusalText =
 
 type ReadinessState = "checking" | "ready" | "blocked";
 
+type ConversationTurn = {
+  id: number;
+  question: string;
+  response: PublicQueryResponse | null;
+  feedback: QueryFeedback | null;
+};
+
 export function ChatShell() {
   const [question, setQuestion] = useState("");
-  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
-  const [response, setResponse] = useState<PublicQueryResponse | null>(null);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<QueryFeedback | null>(null);
   const [readinessState, setReadinessState] = useState<ReadinessState>("checking");
   const [readinessDetail, setReadinessDetail] = useState("Confirmando disponibilidade da API.");
   const [readinessRun, setReadinessRun] = useState(0);
@@ -31,6 +36,8 @@ export function ChatShell() {
 
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const errorRef = useRef<HTMLDivElement | null>(null);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
+  const turnSequenceRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,27 +88,44 @@ export function ChatShell() {
     };
   }, [readinessRun]);
 
+  useEffect(() => {
+    if (turns.length === 0) return;
+
+    const frameId = requestAnimationFrame(() => {
+      const conversation = conversationRef.current;
+      if (conversation) {
+        conversation.scrollTop = conversation.scrollHeight;
+      }
+    });
+
+    return () => cancelAnimationFrame(frameId);
+  }, [busy, turns]);
+
   const canAsk = readinessState === "ready" && !busy;
-  const sentences = response?.answer?.sentences ?? [];
-  const isRefusal = response !== null && (response.insufficient_evidence || sentences.length === 0);
-  const hasConversation = Boolean(submittedQuestion || response || busy);
+  const hasConversation = turns.length > 0 || busy;
+  const hasResponse = turns.some((turn) => turn.response !== null);
 
   async function handleQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canAsk || !question.trim()) return;
 
     const asked = question.trim();
+    const turnId = turnSequenceRef.current + 1;
+    turnSequenceRef.current = turnId;
     setQuestion("");
-    setSubmittedQuestion(asked);
-    setResponse(null);
-    setFeedback(null);
+    setTurns((current) => [
+      ...current,
+      { id: turnId, question: asked, response: null, feedback: null }
+    ]);
     setError(null);
     setBusy(true);
     setEvidencePanelOpen(false);
 
     try {
       const nextResponse = await askDocs(asked);
-      setResponse(nextResponse);
+      setTurns((current) =>
+        current.map((turn) => (turn.id === turnId ? { ...turn, response: nextResponse } : turn))
+      );
 
       const defaultCitation =
         nextResponse.answer?.sentences[0]?.citation_id ??
@@ -123,17 +147,25 @@ export function ChatShell() {
     }
   }
 
-  async function handleFeedback(nextFeedback: QueryFeedback) {
-    if (!response?.event_id) return;
-
-    const previousFeedback = feedback;
-    setFeedback(nextFeedback);
+  async function handleFeedback(
+    turnId: number,
+    eventId: string,
+    nextFeedback: QueryFeedback
+  ) {
+    const previousFeedback = turns.find((turn) => turn.id === turnId)?.feedback ?? null;
+    setTurns((current) =>
+      current.map((turn) => (turn.id === turnId ? { ...turn, feedback: nextFeedback } : turn))
+    );
     setError(null);
 
     try {
-      await sendQueryFeedback(response.event_id, nextFeedback);
+      await sendQueryFeedback(eventId, nextFeedback);
     } catch (err) {
-      setFeedback(previousFeedback);
+      setTurns((current) =>
+        current.map((turn) =>
+          turn.id === turnId ? { ...turn, feedback: previousFeedback } : turn
+        )
+      );
       setError(err instanceof Error ? err.message : "Não foi possível registrar o feedback.");
       requestAnimationFrame(() => errorRef.current?.focus());
     }
@@ -203,6 +235,8 @@ export function ChatShell() {
       <div className="mx-auto grid max-w-7xl grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="flex min-h-[calc(100vh-64px)] flex-col">
           <div
+            ref={conversationRef}
+            data-conversation-scroll
             className={
               hasConversation
                 ? "flex-1 overflow-y-auto px-4 py-6 sm:px-6"
@@ -214,7 +248,7 @@ export function ChatShell() {
               aria-live="polite"
               aria-relevant="additions text"
             >
-              {!submittedQuestion && !response ? (
+              {turns.length === 0 ? (
                 <section className="rounded-2xl border border-line bg-white p-6 text-center shadow-sm shadow-black/5 sm:p-8">
                   <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent">
                     Consulta pública
@@ -241,66 +275,85 @@ export function ChatShell() {
                 </section>
               ) : null}
 
-              {submittedQuestion ? (
-                <article className="self-end rounded-2xl bg-accent px-4 py-3 text-sm leading-6 text-white shadow-sm shadow-black/10">
-                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-teal-50/80">
-                    Pergunta
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap">{submittedQuestion}</p>
-                </article>
-              ) : null}
+              {turns.map((turn, turnIndex) => {
+                const response = turn.response;
+                const sentences = response?.answer?.sentences ?? [];
+                const isRefusal =
+                  response !== null &&
+                  (response.insufficient_evidence || sentences.length === 0);
+                const isPending =
+                  busy && turnIndex === turns.length - 1 && turn.response === null;
 
-              {busy ? (
-                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-6 text-ink-soft shadow-sm shadow-black/5">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="animate-spin text-accent" size={16} aria-hidden="true" />
-                    Consultando o índice e preparando citações...
-                  </div>
-                </article>
-              ) : null}
+                return (
+                  <Fragment key={turn.id}>
+                    <article className="self-end rounded-2xl bg-accent px-4 py-3 text-sm leading-6 text-white shadow-sm shadow-black/10">
+                      <p className="text-xs font-medium uppercase tracking-[0.14em] text-teal-50/80">
+                        Pergunta
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap">{turn.question}</p>
+                    </article>
 
-              {response ? (
-                <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-7 text-ink shadow-sm shadow-black/5 sm:px-5">
-                  <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-line pb-3">
-                    <p className="font-serif text-sm font-semibold uppercase tracking-[0.14em] text-accent">
-                      Resposta extraída
-                    </p>
-                    {isRefusal ? (
-                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
-                        Evidência insuficiente
-                      </span>
+                    {isPending ? (
+                      <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-6 text-ink-soft shadow-sm shadow-black/5">
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="animate-spin text-accent" size={16} aria-hidden="true" />
+                          Consultando o índice e preparando citações...
+                        </div>
+                      </article>
                     ) : null}
-                  </div>
 
-                  <div className="space-y-3">
-                    {!isRefusal ? (
-                      sentences.map((sentence, sentenceIndex) => (
-                        <p
-                          key={`${response.event_id}-${sentence.citation_id}-${sentenceIndex}`}
-                          className="text-base leading-8 text-ink"
-                        >
-                          <span>{sentence.text}</span>{" "}
-                          <button
-                            type="button"
-                            onClick={() => selectEvidence(response.evidence, sentence.citation_id)}
-                            className="inline-flex min-h-[24px] min-w-[24px] translate-y-[-1px] items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-xs font-semibold text-accent outline-none hover:border-accent/60 hover:bg-white focus-visible:ring-4 focus-visible:ring-accent/20"
-                            aria-label={`Inspecionar evidência ${sentence.citation_id}`}
-                            aria-pressed={selectedEvidenceId === sentence.citation_id}
-                          >
-                            [{sentence.citation_id}]
-                          </button>
-                        </p>
-                      ))
-                    ) : (
-                      <p className="text-base leading-8 text-ink">{refusalText}</p>
-                    )}
-                  </div>
+                    {response ? (
+                      <article className="rounded-2xl border border-line bg-white px-4 py-4 text-sm leading-7 text-ink shadow-sm shadow-black/5 sm:px-5">
+                        <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-line pb-3">
+                          <p className="font-serif text-sm font-semibold uppercase tracking-[0.14em] text-accent">
+                            Resposta extraída
+                          </p>
+                          {isRefusal ? (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+                              Evidência insuficiente
+                            </span>
+                          ) : null}
+                        </div>
 
-                  {response && !isRefusal ? (
-                    <FeedbackControls feedback={feedback} onFeedback={handleFeedback} />
-                  ) : null}
-                </article>
-              ) : null}
+                        <div className="space-y-3">
+                          {!isRefusal ? (
+                            sentences.map((sentence, sentenceIndex) => (
+                              <p
+                                key={`${response.event_id}-${sentence.citation_id}-${sentenceIndex}`}
+                                className="text-base leading-8 text-ink"
+                              >
+                                <span>{sentence.text}</span>{" "}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    selectEvidence(response.evidence, sentence.citation_id)
+                                  }
+                                  className="inline-flex min-h-[24px] min-w-[24px] translate-y-[-1px] items-center justify-center rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-xs font-semibold text-accent outline-none hover:border-accent/60 hover:bg-white focus-visible:ring-4 focus-visible:ring-accent/20"
+                                  aria-label={`Inspecionar evidência ${sentence.citation_id}`}
+                                  aria-pressed={selectedEvidenceId === sentence.citation_id}
+                                >
+                                  [{sentence.citation_id}]
+                                </button>
+                              </p>
+                            ))
+                          ) : (
+                            <p className="text-base leading-8 text-ink">{refusalText}</p>
+                          )}
+                        </div>
+
+                        {!isRefusal ? (
+                          <FeedbackControls
+                            feedback={turn.feedback}
+                            onFeedback={(nextFeedback) =>
+                              void handleFeedback(turn.id, response.event_id, nextFeedback)
+                            }
+                          />
+                        ) : null}
+                      </article>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </div>
           </div>
 
@@ -354,7 +407,7 @@ export function ChatShell() {
 
         {isDesktop ? (
           <aside className="hidden min-h-[calc(100vh-64px)] border-l border-line lg:flex lg:flex-col">
-            {response ? (
+            {hasResponse ? (
               <EvidenceBench evidence={panelEvidence} selectedId={selectedEvidenceId} />
             ) : (
               <div className="flex flex-1 flex-col justify-center bg-bench px-5 py-10 text-sm leading-6 text-ink-soft">
