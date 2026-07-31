@@ -227,6 +227,41 @@ describe("frontend API client", () => {
     }
   });
 
+  test("keeps the GitHub ingestion request alive for up to five minutes", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementationOnce((_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      })
+    );
+
+    try {
+      const pendingRequest = adminIngestGithub("admin-secret", {
+        repo_url: "https://github.com/example/repo",
+        branch: "main",
+        path: "docs",
+        max_files: 500
+      });
+      const capturedError = pendingRequest.catch((error: unknown) => error);
+      const signal = fetchInitAt(0).signal;
+
+      expect(signal).toBeInstanceOf(AbortSignal);
+      await vi.advanceTimersByTimeAsync(299999);
+      expect(signal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(capturedError).resolves.toMatchObject({
+        name: "ApiError",
+        status: 0,
+        message: "Request timed out."
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("turns FastAPI error bodies into a single safe ApiError", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "Document source not found." }, { status: 404 }));
 

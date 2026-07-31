@@ -43,6 +43,7 @@ def test_compose_preserves_database_url_driver_split_and_frontend_build_arg() ->
     )
     assert "args:" in compose
     assert "NEXT_PUBLIC_BACKEND_URL: http://localhost:8000" in compose
+    assert 'ALLOWED_ORIGINS: \'["http://localhost:3000","http://127.0.0.1:3000"]\'' in compose
 
 
 def test_render_manifest_declares_health_start_command_and_secret_sources() -> None:

@@ -3,7 +3,7 @@ from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
@@ -138,8 +138,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_embedding_model: str = "text-embedding-3-small"
 
-    llm_provider: Literal["extractive", "openai"] = "extractive"
-    openai_chat_model: str = "gpt-4.1-mini"
+    llm_provider: Literal["extractive"] = "extractive"
     retrieval_min_score: float = Field(
         default=0.0,
         ge=-1.0,
@@ -169,8 +168,6 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
-
-    public_backend_url: HttpUrl | None = None
 
     @model_validator(mode="after")
     def validate_deployment_settings(self) -> "Settings":

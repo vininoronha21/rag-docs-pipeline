@@ -178,7 +178,13 @@ export function ChatShell() {
                 }
                 aria-hidden="true"
               />
-              <span>{readinessState === "ready" ? "API pronta" : "Preparando"}</span>
+              <span>
+                {readinessState === "ready"
+                  ? "API pronta"
+                  : readinessState === "blocked"
+                    ? "API indisponível"
+                    : "Preparando"}
+              </span>
               <span className="sr-only">{readinessDetail}</span>
               {readinessState === "blocked" ? (
                 <button
@@ -353,11 +359,11 @@ export function ChatShell() {
             ) : (
               <div className="flex flex-1 flex-col justify-center bg-bench px-5 py-10 text-sm leading-6 text-ink-soft">
                 <div className="mx-auto w-full max-w-[280px]">
-                <p className="font-serif text-sm font-semibold text-ink">Como funciona</p>
-                <p>
-                  Cada resposta é extraída da documentação indexada. Toda frase carrega uma citação,
-                  e a prova aparece aqui: caminho, commit fixado e o trecho exato.
-                </p>
+                  <p className="font-serif text-sm font-semibold text-ink">Como funciona</p>
+                  <p>
+                    Cada resposta é extraída da documentação indexada. Toda frase carrega uma citação,
+                    e a prova aparece aqui: caminho, commit fixado e o trecho exato.
+                  </p>
                 </div>
               </div>
             )}

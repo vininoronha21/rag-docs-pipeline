@@ -151,9 +151,7 @@ def _has_high_signal_support(sentence_terms: set[str], query_terms: set[str]) ->
 def _support_terms_match(left: str, right: str) -> bool:
     if left == right:
         return True
-    return min(len(left), len(right)) >= 5 and (
-        left.startswith(right) or right.startswith(left)
-    )
+    return min(len(left), len(right)) >= 5 and (left.startswith(right) or right.startswith(left))
 
 
 def _term_overlap(text: str, query_terms: set[str]) -> int:

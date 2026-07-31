@@ -60,6 +60,7 @@ def install_github(
     session: FakeSession,
     *,
     before_fetch: Callable[[], None] | None = None,
+    files: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
     async def assert_outside_transaction(*args: object, **kwargs: object) -> object:
         assert session.transaction_open is False
@@ -74,7 +75,7 @@ def install_github(
         assert session.commits == 0
         if before_fetch is not None:
             before_fetch()
-        return [
+        default_files = [
             SimpleNamespace(
                 path="docs/index.md",
                 html_url=f"https://github.com/example/project/blob/{COMMIT_SHA}/docs/index.md",
@@ -82,6 +83,7 @@ def install_github(
                 content="# Install\n\nRun the server.",
             )
         ]
+        return default_files if files is None else files
 
     github = SimpleNamespace(
         get_repo=AsyncMock(side_effect=assert_outside_transaction),
@@ -205,6 +207,31 @@ async def test_external_preparation_runs_without_database_transaction(
     assert session.commits == 1
     assert session.rollbacks == 1
     mocks["create_source_version_with_documents"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_empty_markdown_source_is_rejected_before_source_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    github = install_github(monkeypatch, session, files=[])
+    mocks = install_repositories(
+        monkeypatch,
+        session,
+        observed_active=None,
+        locked_source=SimpleNamespace(id=9, active_version_id=None),
+        locked_active=None,
+        source_exists=False,
+    )
+    embeddings = FakeEmbeddings(session)
+
+    with pytest.raises(ValueError, match="No indexable Markdown content"):
+        await ingest(session, embeddings)
+
+    github.close.assert_awaited_once()
+    embeddings.embed_texts.assert_not_awaited()
+    mocks["get_or_create_doc_source"].assert_not_awaited()
+    assert session.commits == 0
 
 
 @pytest.mark.asyncio
