@@ -11,17 +11,17 @@ The validated release target is the FastAPI Portuguese documentation corpus:
 - Path: `docs/pt/docs`
 - Evaluation dataset: `evaluation/pt-br/questions.jsonl`
 
-This summary reflects the final validated release branch state through `feature/portfolio-rag-release` commit `4139fc3`.
+This summary reflects the locally audited `dev` branch state on 2026-07-30.
 
 ## Current Release State
 
 - Backend: FastAPI monolith with public query/readiness endpoints and Bearer-protected admin endpoints.
 - Frontend: Next.js citation-first public chat and protected admin shell.
 - Database: PostgreSQL plus pgvector with versioned source snapshots and active-version retrieval.
-- Default answer mode: extractive answers only; external chat synthesis is not implemented.
+- Answer mode: extractive only; unsupported `LLM_PROVIDER` values fail during configuration instead of being silently ignored.
 - Default embeddings: local deterministic embeddings; OpenAI embeddings are optional but not required for the first deploy.
 - Deployment target: Render backend, Vercel frontend, Neon-compatible PostgreSQL/pgvector.
-- Final release review status: focused follow-up reviews are clean after the final CORS validation fixes.
+- Final review status: frontend, backend, integrations, dependency security, containers, and browser flows are locally validated.
 
 ## Backend Surface
 
@@ -53,6 +53,7 @@ Backend controls:
 - `DocSource` identifies a source by repository, branch, and path.
 - `SourceVersion` stores immutable commit snapshots with embedding provider, model, dimensions, document count, and chunk count.
 - Active versions are promoted after successful synchronization; retained versions remain available for pruning and audit.
+- Sources with no indexable Markdown are rejected before source creation or version promotion.
 - Documents are unique by source version and repository path.
 - Chunks store text, hash, metadata, pgvector embedding, and PostgreSQL full-text search vector.
 - The GitHub client uses API requests with optional Bearer auth for GitHub API endpoints and a separate unauthenticated client for `raw.githubusercontent.com` file downloads.
@@ -98,6 +99,7 @@ Additional privacy hardening:
 - Public question composer mirrors the backend maximum question length.
 - Admin shell keeps the Bearer secret in memory only.
 - Admin sync sends `max_files: 500` to support the approved FastAPI PT-BR corpus.
+- Admin ingestion uses a five-minute client timeout; ordinary API calls retain the short default timeout.
 - Admin source cards show active commit/version and active document/chunk counts.
 
 ## Deployment
@@ -111,24 +113,30 @@ Additional privacy hardening:
 
 ## Verification Evidence
 
-Latest final verification from the release branch:
+Latest final verification from the audited `dev` branch:
 
 - `git diff --check`: passed.
-- `PYENV_VERSION=3.12.13 python -m ruff check backend`: passed.
-- `TEST_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag_docs_test PYENV_VERSION=3.12.13 python -m pytest backend/tests`: `315 passed`, one existing Starlette multipart pending-deprecation warning.
+- `./.venv/bin/python -m ruff check backend`: passed.
+- `TEST_DATABASE_URL=postgresql+psycopg://rag:rag@127.0.0.1:5432/rag_docs_test ./.venv/bin/python -m pytest backend/tests`: `317 passed`, with five upstream deprecation warnings.
 - `npm --prefix frontend run typecheck`: passed.
-- `npm --prefix frontend run test:run`: `23 passed`.
+- `npm --prefix frontend run test:run`: `36 passed`.
 - `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 npm --prefix frontend run build`: passed.
-- `PYENV_VERSION=3.12.13 PYTHONPATH=backend python backend/scripts/evaluate_retrieval.py --dataset evaluation/pt-br/questions.jsonl --top-k 3 --output evaluation/pt-br/latest-report.json`: `Evaluation PASSED: answerable_top3=14/16, unsupported_refusals=4/4, answer_sentence_validation_failures=0`.
+- `npm audit --audit-level=high`: no known vulnerabilities.
+- `pip-audit -r backend/requirements.txt`: no known vulnerabilities.
+- Live GitHub synchronization promoted FastAPI commit `95f8322ee1dcda7ceace7b1c4f6c9915b36d748f` with 124 documents and 1,353 chunks.
+- `PYTHONPATH=backend ./.venv/bin/python backend/scripts/evaluate_retrieval.py --dataset evaluation/pt-br/questions.jsonl --top-k 3 --output /private/tmp/rag-evaluation-post-sync.json`: `Evaluation PASSED: answerable_top3=14/16, unsupported_refusals=4/4, answer_sentence_validation_failures=0` after the new version was promoted.
+- `docker compose up --build -d postgres backend frontend`: images built and all services started; PostgreSQL reported healthy.
+- Runtime smoke: frontend `200`, backend health `ok`, readiness `database=ok` and `pgvector=ok`, both local CORS origins accepted, answered query cited commit-pinned evidence, unsupported query refused, and unauthenticated admin returned `401`.
+- Firefox WebDriver BiDi check: five screenshots captured, no browser errors, and no framework error overlay.
 
 ## Known Remaining Work
 
 - Live deployed smoke is still pending real Vercel and Render origins plus smoke questions.
-- Docker runtime verification should be retried after the Docker Hub metadata timeout clears.
 - OpenAI embedding batching is not implemented.
-- External LLM synthesis is not implemented.
+- External LLM synthesis is not implemented by design in the current extractive answer mode.
 - Local hash embeddings are deterministic and free but weaker than semantic embeddings.
 - There is no scheduled sync, worker queue, reranker, or non-GitHub connector.
+- Starlette currently emits five non-blocking deprecation warnings in backend tests; these are upstream compatibility warnings, not test failures.
 
 ## Useful Commands
 
