@@ -140,6 +140,10 @@ async def ingest_github_repository(
                     chunk_count=len(chunks),
                 )
             )
+        if not candidate_documents:
+            raise ValueError(
+                "No indexable Markdown content was found in the selected repository path."
+            )
     finally:
         await github.close()
 

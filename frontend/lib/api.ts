@@ -126,6 +126,7 @@ type RequestOptions = {
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 const defaultTimeoutMs = 15000;
+const ingestionTimeoutMs = 300000;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -231,7 +232,7 @@ export async function adminIngestGithub(
       headers: adminHeaders(secret),
       body: JSON.stringify(payload)
     },
-    options
+    { timeoutMs: options.timeoutMs ?? ingestionTimeoutMs }
   );
 }
 

@@ -1,5 +1,3 @@
-ptdddu
-
 # Deployment Guide
 
 This guide defines the hosted contracts for the Render backend, Vercel frontend,
@@ -21,7 +19,7 @@ Set these Render environment variables before the first deploy:
 
 | Variable                   | Source                  | Notes                                     |
 | -------------------------- | ----------------------- | ----------------------------------------- |
-| `ENVIRONMENT`            | Literal`production`   | Non-secret runtime mode.                  |
+| `ENVIRONMENT`            | Literal `production`  | Non-secret runtime mode.                  |
 | `ADMIN_SECRET`           | Render generated secret | Required by production settings.          |
 | `DATABASE_URL`           | Manual secret from Neon | Async SQLAlchemy URL for API runtime.     |
 | `MIGRATION_DATABASE_URL` | Manual secret from Neon | Sync SQLAlchemy URL for Alembic.          |

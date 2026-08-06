@@ -461,14 +461,24 @@ function SourceCard({ source, updating, onToggle }: { source: DocSource; updatin
 }
 
 function SyncResultCard({ result }: { result: IngestResponse }) {
+  const alreadyCurrent = result.status === "no_op";
+
   return (
     <section className="mt-5 rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm leading-6 text-teal-950" aria-live="polite">
-      <p className="font-semibold">Resultado: {result.status}</p>
-      <p>Commit ativo: {result.commit_sha}</p>
-      <p>{formatNumber(result.total_chunks)} chunks sincronizados</p>
-      <p>
-        {formatNumber(result.documents.length)} documentos · source #{result.source_id} · versão #{result.source_version_id}
+      <p className="font-semibold">
+        {alreadyCurrent ? "Fonte já estava atualizada" : "Sincronização concluída"}
       </p>
+      <p>Commit ativo: {result.commit_sha}</p>
+      {alreadyCurrent ? (
+        <p>Nenhuma reindexação foi necessária para esse commit.</p>
+      ) : (
+        <>
+          <p>{formatNumber(result.total_chunks)} chunks sincronizados</p>
+          <p>
+            {formatNumber(result.documents.length)} documentos · source #{result.source_id} · versão #{result.source_version_id}
+          </p>
+        </>
+      )}
     </section>
   );
 }

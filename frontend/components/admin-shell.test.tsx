@@ -176,7 +176,7 @@ describe("AdminShell", () => {
     await user.type(screen.getByLabelText("Caminho curado"), "docs");
     await user.click(screen.getByRole("button", { name: "Registrar e sincronizar fonte" }));
 
-    expect(await screen.findByText("Resultado: synchronized")).toBeVisible();
+    expect(await screen.findByText("Sincronização concluída")).toBeVisible();
     expect(screen.getAllByText("Commit ativo: abc123def456")).toHaveLength(2);
     expect(screen.getByText("7 chunks sincronizados")).toBeVisible();
     expect(await screen.findByText("11 documentos ativos")).toBeVisible();
@@ -268,7 +268,7 @@ describe("AdminShell", () => {
     await unlockAdmin("new-admin-secret");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     expect(await screen.findByText("Nenhuma fonte registrada ainda. Use o formulário para registrar e sincronizar a primeira.")).toBeVisible();
-    expect(screen.queryByText("Resultado: synchronized")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sincronização concluída")).not.toBeInTheDocument();
     expect(screen.queryByText("Commit ativo: abc123def456")).not.toBeInTheDocument();
     expect(screen.queryByText("example/project")).not.toBeInTheDocument();
     expect(headerValue(fetchInitAt(0).headers, "Authorization")).toBe("Bearer old-admin-secret");

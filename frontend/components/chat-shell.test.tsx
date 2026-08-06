@@ -110,6 +110,22 @@ function duplicateCitationResponse(): PublicQueryResponse {
   };
 }
 
+function secondAnsweredResponse(): PublicQueryResponse {
+  return {
+    ...answeredResponse(),
+    event_id: "550e8400-e29b-41d4-a716-446655440003",
+    answer: {
+      sentences: [
+        {
+          text: "Use o AsyncClient do HTTPX para testar a aplicação de forma assíncrona.",
+          citation_id: "c2"
+        }
+      ]
+    },
+    evidence: [evidenceRecords[1]]
+  };
+}
+
 function insufficientResponse(): PublicQueryResponse {
   return {
     event_id: "550e8400-e29b-41d4-a716-446655440001",
@@ -186,7 +202,7 @@ describe("ChatShell", () => {
     expect(root.props.lang).toBe("pt-BR");
   });
 
-  test("keeps the public surface free of admin and history controls while readiness disables the composer", async () => {
+  test("keeps the public surface free of admin and persisted-history controls while readiness disables the composer", async () => {
     const readiness = deferred<ReadinessResponse>();
     checkReadinessMock.mockReturnValueOnce(readiness.promise);
 
@@ -281,6 +297,27 @@ describe("ChatShell", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  test("keeps previous turns visible when the visitor asks another question", async () => {
+    askDocsMock
+      .mockResolvedValueOnce(answeredResponse())
+      .mockResolvedValueOnce(secondAnsweredResponse());
+    render(<ChatShell />);
+
+    await submitQuestion("Como executo o projeto localmente?");
+    await screen.findByText("Execute uvicorn app.main:app --reload.");
+
+    await submitQuestion("Como testo a aplicação de forma assíncrona?");
+    await screen.findByText(
+      "Use o AsyncClient do HTTPX para testar a aplicação de forma assíncrona."
+    );
+
+    expect(screen.getByText("Como executo o projeto localmente?")).toBeVisible();
+    expect(screen.getByText("Como testo a aplicação de forma assíncrona?")).toBeVisible();
+    expect(screen.getByText("Execute uvicorn app.main:app --reload.")).toBeVisible();
+    expect(askDocsMock).toHaveBeenNthCalledWith(1, "Como executo o projeto localmente?");
+    expect(askDocsMock).toHaveBeenNthCalledWith(2, "Como testo a aplicação de forma assíncrona?");
   });
 
   test("opens the evidence panel automatically when evidence is insufficient and keeps the refusal visible", async () => {

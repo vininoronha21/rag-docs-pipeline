@@ -1,5 +1,3 @@
-dae
-
 # Environment Variables
 
 This project has separate database URLs for runtime traffic and migrations.
@@ -46,7 +44,6 @@ as a required backend secret.
 | `OPENAI_API_KEY`                 | Required only when OpenAI features are enabled | Secret             | Backend AI providers     | Empty                                                    | `openai-example-key-not-real`                                                                                |
 | `OPENAI_EMBEDDING_MODEL`         | Optional                                       | Private non-secret | Backend retrieval        | `text-embedding-3-small`                               | `text-embedding-3-small`                                                                                     |
 | `LLM_PROVIDER`                   | Optional                                       | Private non-secret | Backend answer synthesis | `extractive`                                           | `extractive`                                                                                                 |
-| `OPENAI_CHAT_MODEL`              | Optional                                       | Private non-secret | Backend answer synthesis | `gpt-4.1-mini`                                         | `gpt-4.1-mini`                                                                                               |
 | `RETRIEVAL_MIN_SCORE`            | Optional                                       | Private non-secret | Backend retrieval        | `0.0`                                                  | `0.2`                                                                                                        |
 | `RETRIEVAL_MIN_FUSED_SCORE`      | Optional                                       | Private non-secret | Backend retrieval        | `0.0`                                                  | `0.05`                                                                                                       |
 | `RETRIEVAL_MIN_SCORE_GAP`        | Optional                                       | Private non-secret | Backend retrieval        | `0.0`                                                  | `0.01`                                                                                                       |
@@ -55,7 +52,6 @@ as a required backend secret.
 | `RETRIEVAL_VECTOR_WEIGHT`        | Optional                                       | Private non-secret | Backend retrieval        | `0.7`                                                  | `0.7`                                                                                                        |
 | `RETRIEVAL_TEXT_WEIGHT`          | Optional                                       | Private non-secret | Backend retrieval        | `0.3`                                                  | `0.3`                                                                                                        |
 | `ALLOWED_ORIGINS`                | Required for deployed frontend access          | Public             | Backend API CORS         | `["http://localhost:3000","http://127.0.0.1:3000"]`    | `["https://docs-chat.example.com"]`                                                                          |
-| `PUBLIC_BACKEND_URL`             | Optional                                       | Public             | Backend API              | Empty                                                    | `https://api.example.com`                                                                                    |
 
 ## Frontend Variables
 

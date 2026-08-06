@@ -34,7 +34,7 @@ def test_cli_ingest_requires_non_empty_path(arguments: list[str]) -> None:
     )
 
     assert result.exit_code == 2
-    assert "PATH" in result.output
+    assert "path" in result.output.lower()
 
 
 @pytest.mark.parametrize("status", ["synchronized", "no_op"])
