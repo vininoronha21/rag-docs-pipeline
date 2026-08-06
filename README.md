@@ -6,7 +6,7 @@ O RAG Docs Pipeline transforma documentação Markdown de repositórios GitHub e
 
 O projeto nasceu de um problema real: pesquisar manualmente em uma documentação extensa consome tempo, enquanto respostas geradas sem referência criam um novo problema de confiança.
 
-## Como Funciona
+## ❓ Como Funciona
 
 O sistema conecta um repositório, cria uma base de conhecimento versionada e entrega respostas citation-first. Cada afirmação da resposta aponta para um trecho real, com caminho do arquivo, seção, commit e link permanente para o GitHub. Quando o corpus não oferece evidência suficiente, o sistema assume essa ausência em vez de inventar uma resposta.
 
@@ -30,8 +30,8 @@ O objetivo não é apenas colocar uma interface de chat sobre documentos. O dife
 
 Uma nova versão só se torna ativa depois que a sincronização termina com sucesso. Na consulta, fontes desativadas e versões antigas ficam fora da recuperação. Esse desenho evita misturar documentação obsoleta com conteúdo atual e torna cada resposta reproduzível.
 
-
 ## Embeddings Locais vs LLM Externo
+
 O modo padrão usa embeddings locais determinísticos e não depende de um LLM externo. Para cenários que pedem maior qualidade semântica, a integração com embeddings da OpenAI pode ser habilitada por configuração para trazer respostas mais aprofundadas e dinâmicas.
 
 ## 🚀 Como Utilizar
@@ -95,27 +95,6 @@ Para configuração de variáveis e publicação, consulte [docs/environment.md]
 - Testes: Pytest, Vitest, Testing Library e Ruff
 - Infraestrutura: Docker Compose e GitHub Actions
 - Deploy: Opções preparadas para hospedagem em Vercel, Render e Neon
-
-## ✅ Testes e Qualidade
-
-O projeto possui validação automatizada para backend, frontend, integração com banco e build de produção.
-
-- Backend: lint com Ruff, testes com Pytest e testes de integração com PostgreSQL/pgvector.
-- Frontend: typecheck com TypeScript, testes com Vitest/Testing Library e build do Next.js.
-- CI: GitHub Actions executa validações em push para `main` e em pull requests.
-- Smoke tests: script para validar frontend, backend, readiness da API e fluxo principal após deploy.
-
-```bash
-# Backend
-ruff check backend
-pytest backend/tests --ignore=backend/tests/integration
-
-# Frontend
-cd frontend
-npm run typecheck
-npm run test:run
-npm run build
-```
 
 ## 📁 Estrutura do Projeto
 
