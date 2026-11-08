@@ -57,11 +57,6 @@ O modo padrão usa embeddings locais determinísticos e não depende de um LLM e
 5. O pipeline aplica limites de relevância e extrai apenas frases sustentadas pelos chunks recuperados.
 6. O frontend apresenta a resposta, as citações e o trecho original fixado no commit correspondente.
 
-<p align="center">
-  <img src="assets/06-repository-github.png" alt="Repositório GitHub utilizado como fonte de documentação" width="760">
-</p>
-
-
 A API também expõe contratos OpenAPI para saúde, prontidão, consultas, feedback e operações administrativas.
 
 ![Documentação OpenAPI do backend FastAPI](assets/05-api-docs.png)
