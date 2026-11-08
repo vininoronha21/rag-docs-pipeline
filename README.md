@@ -6,9 +6,18 @@ O RAG Docs Pipeline transforma documentação Markdown de repositórios GitHub e
 
 O projeto nasceu de um problema real: pesquisar manualmente em uma documentação extensa consome tempo, enquanto respostas geradas sem referência criam um novo problema de confiança.
 
+## 🎬 Vídeo de Apresentação
+
+O projeto possui uma demonstração completa em vídeo. Para preservar a qualidade original, o MP4 não é incorporado ao README: [**assistir à apresentação — `assets/videos/rag-docs-pipeline-demo.mp4`**](assets/videos/rag-docs-pipeline-demo.mp4).
+
 ## ❓ Como Funciona
 
 O sistema conecta um repositório, cria uma base de conhecimento versionada e entrega respostas citation-first. Cada afirmação da resposta aponta para um trecho real, com caminho do arquivo, seção, commit e link permanente para o GitHub. Quando o corpus não oferece evidência suficiente, o sistema assume essa ausência em vez de inventar uma resposta.
+
+<p align="center">
+  <img src="assets/01-home.png" alt="Tela inicial do RAG Docs Pipeline" width="760">
+</p>
+
 
 ![Consulta com resposta extraída e evidência vinculada](assets/02-query-with-evidence.png)
 
@@ -21,6 +30,11 @@ O sistema conecta um repositório, cria uma base de conhecimento versionada e en
 - Estado explícito de `insufficient_evidence` para perguntas não sustentadas pelo corpus.
 - Métricas operacionais sem persistir o texto das perguntas ou respostas.
 - Execução completa em Docker Compose, sem exigir serviços pagos.
+
+<p align="center">
+  <img src="assets/03-admin-login.png" alt="Tela de autenticação do painel administrativo" width="760">
+</p>
+
 
 ![Painel administrativo com métricas e fontes versionadas](assets/04-admin-dashboard.png)
 
@@ -42,6 +56,11 @@ O modo padrão usa embeddings locais determinísticos e não depende de um LLM e
 4. A pergunta passa por recuperação vetorial e Full-Text Search; os rankings são combinados com RRF.
 5. O pipeline aplica limites de relevância e extrai apenas frases sustentadas pelos chunks recuperados.
 6. O frontend apresenta a resposta, as citações e o trecho original fixado no commit correspondente.
+
+<p align="center">
+  <img src="assets/06-repository-github.png" alt="Repositório GitHub utilizado como fonte de documentação" width="760">
+</p>
+
 
 A API também expõe contratos OpenAPI para saúde, prontidão, consultas, feedback e operações administrativas.
 
